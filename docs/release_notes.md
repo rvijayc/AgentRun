@@ -1,3 +1,8 @@
+## V0.2.6(05-15-2025)
+- Added ability to customize installation commands.
+- Optionally ignore certain dependencies.
+- Optionally ignore checking certain unsafe functions.
+
 ## V0.2.5(10-21-2024)
 - Added uv as the dependency manager
 - improved performance and execution time through uv

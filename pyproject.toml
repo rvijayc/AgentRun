@@ -10,7 +10,7 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License"
 ]
 dependencies = [
- "docker", "RestrictedPython", 
+ "docker", "RestrictedPython", "loguru"
 ]
 
 [build-system]

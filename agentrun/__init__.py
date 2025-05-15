@@ -67,7 +67,7 @@ class UVInstallPolicy(InstallPolicy):
         return f"uv pip uninstall {package}"
 
     def list_cmd(self) -> str:
-        return "uv pip list --format=json"
+        return "uv pip list --format=json -q"
 
     def parse_packages(self, output) -> List[str]:
         pkg_list = []
@@ -120,7 +120,7 @@ class AgentRun:
         memswap_limit="512m",
         client=None,
         install_policy=UVInstallPolicy(),
-        log_level='INFO'
+        log_level='WARNING'
     ) -> None:
 
         self.cpu_quota = cpu_quota
@@ -158,11 +158,6 @@ class AgentRun:
         except docker.errors.NotFound:
             raise ValueError(f"Container {self.container_name} not found.")
 
-        if (
-            not self.is_everything_whitelisted()
-            and not self.validate_cached_dependencies()
-        ):
-            raise ValueError("Some cached dependencies are not in the whitelist.")
         # run any initialization commands specified.
         for command in self.install_policy.init_cmds():
             container = self.client.containers.get(self.container_name)
@@ -178,8 +173,18 @@ class AgentRun:
         # any package that was already installed inside the container is considered "cached"
         exec_log = container.exec_run(cmd=self.install_policy.list_cmd(), workdir="/code")
         exit_code, output = exec_log.exit_code, exec_log.output.decode("utf-8")
+        if exit_code != 0:
+            raise RuntimeError('{} failed with output: {}'.format(
+                self.install_policy.list_cmd(), output))
         self.cached_dependencies = set(self.install_policy.parse_packages(output))
         self.logger.debug(f'Found Packages: {", ".join(self.cached_dependencies)}')
+
+        # validate all cached dependencies before installing them.
+        if (
+            not self.is_everything_whitelisted()
+            and not self.validate_cached_dependencies(cached_dependencies)
+        ):
+            raise ValueError("Some cached dependencies are not in the whitelist.")
 
         # if additional packages are specified as cached dependencies, install
         # them on start-up and add them to the original list of cached
@@ -187,7 +192,7 @@ class AgentRun:
         if cached_dependencies:
             self.install_dependencies(container, cached_dependencies)
             self.cached_dependencies.update(cached_dependencies)
-        
+
     class CommandTimeout(Exception):
         """Exception raised when a command execution times out."""
 
@@ -202,7 +207,7 @@ class AgentRun:
         """
         return "*" in self.dependencies_whitelist
 
-    def validate_cached_dependencies(self) -> bool:
+    def validate_cached_dependencies(self, cached_dependencies) -> bool:
         """
         Validates the cached dependencies against the whitelist.
 
@@ -212,7 +217,7 @@ class AgentRun:
         if self.is_everything_whitelisted():
             return True
         return all(
-            dep in self.dependencies_whitelist for dep in self.cached_dependencies
+            dep in self.dependencies_whitelist for dep in cached_dependencies
         )
 
     def install_cached_dependencies(self) -> None:

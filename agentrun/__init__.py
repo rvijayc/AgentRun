@@ -11,11 +11,15 @@ from typing import Any, Union, List, Optional, Tuple
 from uuid import uuid4
 import abc
 from loguru import logger
-
+import json
 
 import docker
 from docker.models.containers import Container
 from RestrictedPython import compile_restricted
+
+# list all packages installed in the current version of python.
+PKG_LIST_PROGRAM=r"""'import pkgutil\nfor p in pkgutil.iter_modules():\n print(p.name)'"""
+PKG_LIST_CMD=r"""python3 -c "exec({})" """.format(PKG_LIST_PROGRAM)
 
 class InstallPolicy(abc.ABC):
     """
@@ -40,9 +44,19 @@ class InstallPolicy(abc.ABC):
     def uninstall_cmd(self, package:str) -> str:
         """ Uninstalls the specified Package """
 
-    @abc.abstractmethod
     def list_cmd(self) -> str:
-        """ Lists all available packages """
+        """ Lists all available packages. The default version uses Python's pkgutil itself. """
+        return PKG_LIST_CMD
+
+    def parse_packages(self, output) -> List[str]:
+        """
+        Parse the output of "list_cmd" and return the packages deteected.
+        """
+        return [ 
+            line
+            for line in output.splitlines() 
+            if not (line.startswith('_') or line.startswith('script_'))
+        ]
 
 class UVInstallPolicy(InstallPolicy):
 
@@ -50,10 +64,16 @@ class UVInstallPolicy(InstallPolicy):
         return f"uv pip install {package}"
 
     def uninstall_cmd(self, package:str):
-        return f"uv pip uninstall -y {package}"
+        return f"uv pip uninstall {package}"
 
-    def list_cmd(self):
-        return "uv pip list"
+    def list_cmd(self) -> str:
+        return "uv pip list --format=json -q"
+
+    def parse_packages(self, output) -> List[str]:
+        pkg_list = []
+        for pkg in json.loads(output):
+            pkg_list.append(pkg['name'])
+        return pkg_list
 
 class PIPInstallPolicy(InstallPolicy):
     
@@ -63,8 +83,11 @@ class PIPInstallPolicy(InstallPolicy):
     def uninstall_cmd(self, package: str):
         return f"pip uninstall -y {package}"
 
-    def list_cmd(self):
-        return f"pip list"
+    def list_cmd(self) -> str:
+        return "pip list"
+
+    def parse_packages(self, output):
+        return [ line.split()[0].lower() for line in output.splitlines() if " " in line ]
 
 class AgentRun:
     """Class to execute Python code in an isolated Docker container.
@@ -97,7 +120,7 @@ class AgentRun:
         memswap_limit="512m",
         client=None,
         install_policy=UVInstallPolicy(),
-        log_level='INFO'
+        log_level='WARNING'
     ) -> None:
 
         self.cpu_quota = cpu_quota
@@ -108,7 +131,6 @@ class AgentRun:
         self.dependencies_whitelist = dependencies_whitelist
         # this is to allow a mock client to be passed in for testing if docker is not available (not implemented yet)
         self.client = client or docker.from_env()
-        self.cached_dependencies = cached_dependencies
         self.install_policy = install_policy
 
         # initialize logging.
@@ -136,11 +158,6 @@ class AgentRun:
         except docker.errors.NotFound:
             raise ValueError(f"Container {self.container_name} not found.")
 
-        if (
-            not self.is_everything_whitelisted()
-            and not self.validate_cached_dependencies()
-        ):
-            raise ValueError("Some cached dependencies are not in the whitelist.")
         # run any initialization commands specified.
         for command in self.install_policy.init_cmds():
             container = self.client.containers.get(self.container_name)
@@ -153,9 +170,29 @@ class AgentRun:
                     self.logger.error(line)
                 raise ValueError(f"Failed to run: {command}.")
 
-        if self.cached_dependencies:
-            self.install_cached_dependencies()
-        
+        # any package that was already installed inside the container is considered "cached"
+        exec_log = container.exec_run(cmd=self.install_policy.list_cmd(), workdir="/code")
+        exit_code, output = exec_log.exit_code, exec_log.output.decode("utf-8")
+        if exit_code != 0:
+            raise RuntimeError('{} failed with output: {}'.format(
+                self.install_policy.list_cmd(), output))
+        self.cached_dependencies = set(self.install_policy.parse_packages(output))
+        self.logger.debug(f'Found Packages: {", ".join(self.cached_dependencies)}')
+
+        # validate all cached dependencies before installing them.
+        if (
+            not self.is_everything_whitelisted()
+            and not self.validate_cached_dependencies(cached_dependencies)
+        ):
+            raise ValueError("Some cached dependencies are not in the whitelist.")
+
+        # if additional packages are specified as cached dependencies, install
+        # them on start-up and add them to the original list of cached
+        # packages.
+        if cached_dependencies:
+            self.install_dependencies(container, cached_dependencies)
+            self.cached_dependencies.update(cached_dependencies)
+
     class CommandTimeout(Exception):
         """Exception raised when a command execution times out."""
 
@@ -170,7 +207,7 @@ class AgentRun:
         """
         return "*" in self.dependencies_whitelist
 
-    def validate_cached_dependencies(self) -> bool:
+    def validate_cached_dependencies(self, cached_dependencies) -> bool:
         """
         Validates the cached dependencies against the whitelist.
 
@@ -180,7 +217,7 @@ class AgentRun:
         if self.is_everything_whitelisted():
             return True
         return all(
-            dep in self.dependencies_whitelist for dep in self.cached_dependencies
+            dep in self.dependencies_whitelist for dep in cached_dependencies
         )
 
     def install_cached_dependencies(self) -> None:
@@ -228,7 +265,7 @@ class AgentRun:
 
     def safety_check(self, 
                      python_code: str,
-                     ignore_unsafe_functions Optional[List[str]]=None
+                     ignore_unsafe_functions: Optional[List[str]]=None
     ) -> dict[str, object]:
         """Check if Python code is safe to execute.
         This function uses common patterns and RestrictedPython to check for unsafe patterns in the code.
@@ -273,7 +310,7 @@ class AgentRun:
         # - some other thing.
         if ignore_unsafe_functions:
             for ignore in ignore_unsafe_functions:
-                if unsafe_functions in ignore:
+                if ignore in unsafe_functions:
                     unsafe_functions.remove(ignore)
 
         # this a crude check first - no need to compile the code if it's obviously unsafe. Performance boost.
@@ -386,20 +423,13 @@ class AgentRun:
             for dep in dependencies:
                 if dep not in self.dependencies_whitelist:
                     return f"Dependency: {dep} is not in the whitelist.", []
-        # if we are doing caching, we need to check if the dependencies are already installed
-        exec_log = container.exec_run(cmd=self.install_policy.list_cmd(), workdir="/code")
-        exit_code, output = exec_log.exit_code, exec_log.output.decode("utf-8")
-        installed_packages = output.splitlines()
-        installed_packages = [
-            line.split()[0].lower() for line in installed_packages if " " in line
-        ]
 
         installed_deps = []
         for dep in dependencies:
-            if dep.lower() in installed_packages:
+            if dep.lower() in self.cached_dependencies:
+                self.logger.debug(f'Package {dep} is already cached.')
                 continue
             self.logger.info(f'Installing {dep} ...')
-            installed_deps.append(dep)
             command = self.install_policy.install_cmd(dep)
             exit_code, output = self.execute_command_in_container(
                 container, command, timeout=120
@@ -409,6 +439,7 @@ class AgentRun:
                 for line in output.splitlines():
                     self.logger.error(line)
                 return f"Failed to install dependency {dep}", installed_deps
+            installed_deps.append(dep)
 
         return "Dependencies installed successfully.", installed_deps
 
@@ -478,7 +509,11 @@ class AgentRun:
             dep_uninstall_result = self.uninstall_dependencies(container, dependencies)
         return None
 
-    def execute_code_in_container(self, python_code: str, ignore_dependencies: Optional[List[str]]=None) -> str:
+    def execute_code_in_container(self, 
+                                  python_code: str, 
+                                  ignore_dependencies: Optional[List[str]]=None,
+                                  ignore_unsafe_functions: Optional[List[str]]=None
+    ) -> str:
         """Executes Python code in an isolated Docker container.
         This is the main function to execute Python code in a Docker container. It performs the following steps:
         1. Check if the code is safe to execute
@@ -495,14 +530,14 @@ class AgentRun:
         """
         container = None
         installed_deps = []
-        script_name = None
+        script_name: Optional[str] = None
         try:
             output = ""
             client = self.client
             timeout_seconds = self.default_timeout
 
             # check  if the code is safe to execute
-            safety_result = self.safety_check(python_code)
+            safety_result = self.safety_check(python_code, ignore_unsafe_functions)
             safety_message = safety_result["message"]
             safe = safety_result["safe"]
             if not safe:
@@ -547,11 +582,7 @@ class AgentRun:
             return str(e)
 
         finally:
-            if container and script_name:
-                # run clean up in a seperate thread to avoid blocking the main thread
-                thread = Thread(
-                    target=self.clean_up, args=(container, script_name, installed_deps)
-                )
-                thread.start()
+            if container and script_name and len(installed_deps) > 0:
+                self.clean_up(container, script_name, installed_deps)
 
         return output

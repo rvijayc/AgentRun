@@ -9,6 +9,14 @@
 [![MkDocs](https://img.shields.io/badge/MkDocs-526CFE?logo=materialformkdocs&logoColor=fff)](https://jonathan-adly.github.io/AgentRun/)
 [![Twitter Follow](https://img.shields.io/twitter/follow/Jonathan_Adly_?style=social)](https://twitter.com/Jonathan_Adly_)
 
+>> This is a fork of the AgentRun library that has some added customizations and optimizations, specifically:
+>>
+>> - Customize Install Commands.
+>> - Fixed issues with "uv" installer.
+>> - Improved management of cached dependencies.
+>> - Option to allow certain unsafe functions (due to false positives).
+>> - Option to ignore certain dependencies.
+
 AgentRun is a Python library that makes it easy to run Python code safely from large language models (LLMs) with a single line of code. Built on top of the Docker Python SDK and RestrictedPython, it provides a simple, transparent, and user-friendly API to manage isolated code execution.
 
 AgentRun automatically installs and uninstalls dependencies with optional caching, limits resource consumption, checks code safety, and sets execution timeouts. It has 97% test coverage with full static typing and only two dependencies.

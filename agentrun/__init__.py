@@ -136,7 +136,7 @@ class AgentRun:
         # initialize logging.
         self.logger = logger.bind(name='AgentRun')
         # remove the default logger.
-        self.logger.remove(0)
+        self.logger.remove()
         # add a async-friendly logger.
         self.logger.add(
             sys.stderr,

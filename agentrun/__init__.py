@@ -135,9 +135,11 @@ class AgentRun:
 
         # initialize logging.
         self.logger = logger.bind(name='AgentRun')
-        # create a async-friendly logger.
+        # remove the default logger.
+        self.logger.remove(0)
+        # add a async-friendly logger.
         self.logger.add(
-            sink=lambda msg: print(msg),  # Console output
+            sys.stderr,
             format="{time} {level} {message}",
             level=log_level,
             enqueue=True  # Enables async behavior

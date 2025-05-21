@@ -1,10 +1,13 @@
 [project]
-name = "agentrun-rvijayc"
+name = "agentrun_plus"
 version = "0.2.6"
-description = "The easiest way to run AI or user generated python code safely in a docker container. This is a fork of the original AgentRun repo with additional customization options."
+description = "The easiest way to run AI or user generated python code safely in a docker container. This is a fork of the original AgentRun repo with additional customization options added."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{name = "Jonathan Adly", email = "gadly0123@gmail.com"}]
+authors = [
+    {name = "Jonathan Adly", email = "gadly0123@gmail.com"},
+    {name = "Vijay Ramasami", email = "rvijayc@gmail.com" }
+]
 license = {text = "Apache-2.0"}
 classifiers = [
     "License :: OSI Approved :: Apache Software License"
@@ -25,10 +28,10 @@ include = ["agentrun*"]
 exclude = ["agentrun-api*", "docs*", "examples*", "tests*", ".github*"]
 
 [project.urls]
-Homepage = "https://github.com/jonathan-adly/agentrun"
-Changelog = "https://github.com/jonathan-adly/agentrun/releases"
-Issues = "https://github.com/jonathan-adly/agentrun/issues"
-CI = "https://github.com/jonathan-adly/agentrun/actions"
+Homepage = "https://github.com/rvijayc/AgentRun"
+Changelog = "https://github.com/rvijayc/AgentRun/releases"
+Issues = "https://github.com/rvijayc/AgentRun/issues"
+CI = "https://github.com/rvijayc/AgentRun/actions"
 
 
 [project.optional-dependencies]

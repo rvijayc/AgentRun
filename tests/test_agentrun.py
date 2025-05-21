@@ -3,7 +3,7 @@ import os
 import docker
 import pytest
 
-from agentrun import AgentRun, UVInstallPolicy
+from agentrun_plus import AgentRun, UVInstallPolicy
 
 LOG_LEVEL="WARNING"
 class TestUVInstallPolicy(UVInstallPolicy):

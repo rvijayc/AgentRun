@@ -1,3 +1,6 @@
+## V0.2.7(05-24-2025)
+- User /home/pythonuser instead of /code in Dockerfile.
+
 ## V0.2.6(05-15-2025)
 - Added ability to customize installation commands.
 - Optionally ignore certain dependencies.

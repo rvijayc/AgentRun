@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from agentrun import AgentRun
+from agentrun_plus import AgentRun
 
 
 class CodeSchema(BaseModel):

@@ -31,7 +31,7 @@ def docker_container():
         "python:3.12.2-slim-bullseye",
         name="test-container",
         detach=True,
-        volumes={'test-volume': {"bind": "/code", "mode": "rw"}},
+        volumes={'test-volume': {"bind": "/home/pythonuser", "mode": "rw"}},
         environment={
             "UV_CONCURRENT_INSTALLS": "1",
         },

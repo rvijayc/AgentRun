@@ -173,7 +173,7 @@ class AgentRun:
                 raise ValueError(f"Failed to run: {command}.")
 
         # any package that was already installed inside the container is considered "cached"
-        exec_log = container.exec_run(cmd=self.install_policy.list_cmd(), workdir="/code")
+        exec_log = container.exec_run(cmd=self.install_policy.list_cmd(), workdir="/home/pythonuser")
         exit_code, output = exec_log.exit_code, exec_log.output.decode("utf-8")
         if exit_code != 0:
             raise RuntimeError('{} failed with output: {}'.format(
@@ -253,7 +253,7 @@ class AgentRun:
 
         def target():
             nonlocal exit_code, output
-            exec_log = container.exec_run(cmd=cmd, workdir="/code")
+            exec_log = container.exec_run(cmd=cmd, workdir="/home/pythonuser")
             exit_code, output = exec_log.exit_code, exec_log.output
 
         thread = Thread(target=target)
@@ -491,7 +491,7 @@ class AgentRun:
             tar.add(temp_script_path, arcname=script_name)
         tar_stream.seek(0)
 
-        exec_result = container.put_archive(path="/code/", data=tar_stream)
+        exec_result = container.put_archive(path="/home/pythonuser", data=tar_stream)
         if exec_result:
             return {"success": True, "message": script_name}
 
@@ -507,7 +507,7 @@ class AgentRun:
         """
         if script_name:
             os.remove(os.path.join("/tmp", script_name))
-            container.exec_run(cmd=f"rm /code/{script_name}", workdir="/code")
+            container.exec_run(cmd=f"rm /home/pythonuser/{script_name}", workdir="/home/pythonuser")
             dep_uninstall_result = self.uninstall_dependencies(container, dependencies)
         return None
 
@@ -575,7 +575,7 @@ class AgentRun:
 
             try:
                 _, output = self.execute_command_in_container(
-                    container, f"python /code/{script_name}", timeout_seconds
+                    container, f"python /home/pythonuser/{script_name}", timeout_seconds
                 )
             except self.CommandTimeout:
                 return "Execution timed out."

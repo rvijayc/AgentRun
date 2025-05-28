@@ -1,6 +1,7 @@
 """AgentRun - Run Python code in an isolated Docker container"""
 
 import ast
+import traceback
 import warnings
 import os
 import sys
@@ -12,8 +13,10 @@ from uuid import uuid4
 import abc
 from loguru import logger
 import json
+import tempfile
 
 import docker
+import docker.errors
 from docker.models.containers import Container
 from RestrictedPython import compile_restricted
 
@@ -89,6 +92,28 @@ class PIPInstallPolicy(InstallPolicy):
     def parse_packages(self, output):
         return [ line.split()[0].lower() for line in output.splitlines() if " " in line ]
 
+def tar_safe_filter(member, path):
+    """
+    Safety check prior to untarring.
+    """
+    # don't allow relative or absolute paths.
+    if member.name.startswith("/") or ".." in member.name:
+        return None  # Skip extraction for unsafe entries
+    return member  # Allow safe entries
+
+def get_uid_gid(container, user):
+    ids = []
+    # get UID first, then GID.
+    for what in ['-u', '-g']:
+        # run command
+        cmd = f'id {what} {user}'
+        exit_code, output = container.exec_run(cmd)
+        # process outputs.
+        if exit_code != 0:
+            raise RuntimeError('Error when running: {cmd}!')
+        ids.append(output.decode().split()[0])
+    return ids
+
 class AgentRun:
     """Class to execute Python code in an isolated Docker container.
 
@@ -152,19 +177,17 @@ class AgentRun:
             raise RuntimeError(
                 f"Failed to connect to Docker daemon. Please make sure Docker is running. {e}"
             )
-
         try:
-            container = self.client.containers.get(self.container_name)
-            if container.status != "running":
+            self.container = self.client.containers.get(self.container_name)
+            if self.container.status != "running":
                 raise ValueError(f"Container {self.container_name} is not running.")
         except docker.errors.NotFound:
             raise ValueError(f"Container {self.container_name} not found.")
 
         # run any initialization commands specified.
         for command in self.install_policy.init_cmds():
-            container = self.client.containers.get(self.container_name)
             exit_code, output = self.execute_command_in_container(
-                container, command, timeout=120
+                command, timeout=120
             )
             if exit_code != 0:
                 self.logger.error(f"Failed to run {command}! See output below:")
@@ -173,7 +196,7 @@ class AgentRun:
                 raise ValueError(f"Failed to run: {command}.")
 
         # any package that was already installed inside the container is considered "cached"
-        exec_log = container.exec_run(cmd=self.install_policy.list_cmd(), workdir="/home/pythonuser")
+        exec_log = self.container.exec_run(cmd=self.install_policy.list_cmd(), workdir="/home/pythonuser")
         exit_code, output = exec_log.exit_code, exec_log.output.decode("utf-8")
         if exit_code != 0:
             raise RuntimeError('{} failed with output: {}'.format(
@@ -192,7 +215,7 @@ class AgentRun:
         # them on start-up and add them to the original list of cached
         # packages.
         if cached_dependencies:
-            self.install_dependencies(container, cached_dependencies)
+            self.install_dependencies(cached_dependencies)
             self.cached_dependencies.update(cached_dependencies)
 
     class CommandTimeout(Exception):
@@ -228,13 +251,12 @@ class AgentRun:
         Raises:
             ValueError: If the dependencies could not be successfully installed.
         """
-        container = self.client.containers.get(self.container_name)
-        output, _ = self.install_dependencies(container, self.cached_dependencies)
+        output, _ = self.install_dependencies(list(self.cached_dependencies))
         if output != "Dependencies installed successfully.":
             raise ValueError(output)
 
     def execute_command_in_container(
-        self, container: Container, cmd: str, timeout: int
+        self, cmd: str, timeout: int
     ) -> tuple[Any | None, Any | str]:
         """Execute a command in a Docker container with a timeout.
 
@@ -249,11 +271,11 @@ class AgentRun:
 
         """
         exit_code, output = None, None
-        self.logger.debug(f'[{container.name}] Running {cmd} ...')
+        self.logger.debug(f'[{self.container.name}] Running {cmd} ...')
 
         def target():
             nonlocal exit_code, output
-            exec_log = container.exec_run(cmd=cmd, workdir="/home/pythonuser")
+            exec_log = self.container.exec_run(cmd=cmd, workdir="/home/pythonuser")
             exit_code, output = exec_log.exit_code, exec_log.output
 
         thread = Thread(target=target)
@@ -268,7 +290,7 @@ class AgentRun:
     def safety_check(self, 
                      python_code: str,
                      ignore_unsafe_functions: Optional[List[str]]=None
-    ) -> dict[str, object]:
+    ) -> dict[str, str | bool]:
         """Check if Python code is safe to execute.
         This function uses common patterns and RestrictedPython to check for unsafe patterns in the code.
 
@@ -365,7 +387,7 @@ class AgentRun:
             # Compile the code using RestrictedPython with a filename indicating its dynamic nature
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
-                compiled_code = compile_restricted(
+                _ = compile_restricted(
                     python_code, filename="<dynamic>", mode="exec"
                 )
             # Note: Execution step is omitted to only check the code without running it
@@ -409,7 +431,7 @@ class AgentRun:
                     dependencies.append(module_name)
         return list(set(dependencies))  # Return unique dependencies
 
-    def install_dependencies(self, container: Container, dependencies: list) -> Tuple[str, List[str]]:
+    def install_dependencies(self, dependencies: list) -> Tuple[str, List[str]]:
         """Install dependencies in the container.
         Args:
             container: Docker container object
@@ -434,7 +456,7 @@ class AgentRun:
             self.logger.info(f'Installing {dep} ...')
             command = self.install_policy.install_cmd(dep)
             exit_code, output = self.execute_command_in_container(
-                container, command, timeout=120
+                command, timeout=120
             )
             if exit_code != 0:
                 self.logger.error(f'{dep} installation failed! Printing stdout ...')
@@ -445,7 +467,7 @@ class AgentRun:
 
         return "Dependencies installed successfully.", installed_deps
 
-    def uninstall_dependencies(self, container: Container, dependencies: list) -> str:
+    def uninstall_dependencies(self, dependencies: list) -> str:
         """Uninstall dependencies in the container.
         Args:
             container: Docker container object
@@ -460,7 +482,7 @@ class AgentRun:
             self.logger.info(f'Uninstalling {dep} ...')
             command = self.install_policy.uninstall_cmd(dep)
             exit_code, output = self.execute_command_in_container(
-                container, command, timeout=120
+                command, timeout=120
             )
             if exit_code != 0:
                 self.logger.error(f'{dep} ininstall failed! Printing stdout ...')
@@ -469,33 +491,96 @@ class AgentRun:
 
         return "Dependencies uninstalled successfully."
 
+    def copy_file_to_container(
+            self,
+            src_path: str,
+            dst_folder: str,
+            user: str = "pythonuser"
+    ):
+        # determine the UID and GID of "pythonuser".
+        user_uid, user_gid = get_uid_gid(self.container, user)
+        if user_uid is None or user_gid is None:
+            return {"success": False, "message": "Unable to determine UID and GID"}
+
+        # create a tar stream containing the python file with the same name
+        # as the python file.
+        tar_stream = BytesIO()
+        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+            # apply UID an GID of pythonuser.
+            tar_info = tar.gettarinfo(src_path)
+            tar_info.uid = int(user_uid)  
+            tar_info.gid = int(user_gid) 
+            # add the file to archive.
+            tar.add(src_path, arcname=os.path.basename(src_path))
+        tar_stream.seek(0)
+
+        # write the tar stream and unarchive it using the container's put_archive.
+        exec_result = self.container.put_archive(path=dst_folder, data=tar_stream)
+        if exec_result:
+            return {"success": True, "message": os.path.basename(src_path)}
+
+        return {"success": False, "message": f"Failed to copy {src_path} to container."}
+
     def copy_code_to_container(
-        self, container: Container, python_code: str
+        self, 
+        python_code: str,
+        dst_file_path: Optional[str] = None,
+        user: str = "pythonuser"
     ) -> dict[str, Union[bool, str]]:
         """Copy Python code to the container.
         Args:
             container: Docker container object
             python_code: Python code to copy
+            dst_file_path: The full path of the file (ex: /path/to/file.py) to
+                copy into the container. If the destination path isn't provided,
+                then the file will be copied to /home/pythonuser/script_{uuid}.py
+                using a random UUID.
         Returns:
             Success message or error message
         """
-        result = {"success": False, "message": ""}
-        script_name = f"script_{uuid4().hex}.py"
-        temp_script_path = os.path.join("/tmp", script_name)
+        # if a destination path isn't provided, use defaults:
+        if dst_file_path is None:
+            dst_script_folder = "/home/pythonuser"
+            script_name = f"script_{uuid4().hex}.py"
+        else:
+            dst_script_folder, script_name = os.path.split(dst_file_path)
 
-        with open(temp_script_path, "w") as file:
-            file.write(python_code)
+        with tempfile.TemporaryDirectory() as tmpdir:
 
-        tar_stream = BytesIO()
-        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-            tar.add(temp_script_path, arcname=script_name)
-        tar_stream.seek(0)
+            # write the python script to a temporary file.
+            temp_script_path = os.path.join(tmpdir, script_name)
+            with open(temp_script_path, "w") as file:
+                file.write(python_code)
 
-        exec_result = container.put_archive(path="/home/pythonuser", data=tar_stream)
-        if exec_result:
-            return {"success": True, "message": script_name}
+            return self.copy_file_to_container(temp_script_path, dst_script_folder, user)
+    
+    def copy_file_from_container(
+            self, 
+            src_path: str,
+            dst_folder: str
+            ) -> str:
 
-        return {"success": False, "message": "Failed to copy script to container."}
+        # get the archive
+        stream, _ = self.container.get_archive(src_path)
+        with tempfile.NamedTemporaryFile(delete=False) as tmpfp:
+            try:
+                # write the tar stream on to a temporary file ...
+                for chunk in stream:
+                    tmpfp.write(chunk)
+                # close it (the file won't get deleted).
+                tmpfp.close()
+
+                # extract it.
+                with tarfile.open(tmpfp.name) as tar:
+                    tar.extractall(dst_folder, filter=tar_safe_filter)
+            finally:
+                # delete the tar file eventually.
+                os.unlink(tmpfp.name)
+
+        # return the destination file name.
+        dst_path = os.path.join(dst_folder, os.path.basename(src_path))
+        assert os.path.isfile(dst_path)
+        return dst_path
 
     def clean_up(
         self, container: Container, script_name: str, dependencies: list
@@ -508,13 +593,14 @@ class AgentRun:
         if script_name:
             os.remove(os.path.join("/tmp", script_name))
             container.exec_run(cmd=f"rm /home/pythonuser/{script_name}", workdir="/home/pythonuser")
-            dep_uninstall_result = self.uninstall_dependencies(container, dependencies)
+            _ = self.uninstall_dependencies(dependencies)
         return None
 
     def execute_code_in_container(self, 
                                   python_code: str, 
                                   ignore_dependencies: Optional[List[str]]=None,
-                                  ignore_unsafe_functions: Optional[List[str]]=None
+                                  ignore_unsafe_functions: Optional[List[str]]=None,
+                                  user: str = "pythonuser"
     ) -> str:
         """Executes Python code in an isolated Docker container.
         This is the main function to execute Python code in a Docker container. It performs the following steps:
@@ -535,7 +621,6 @@ class AgentRun:
         script_name: Optional[str] = None
         try:
             output = ""
-            client = self.client
             timeout_seconds = self.default_timeout
 
             # check  if the code is safe to execute
@@ -543,24 +628,22 @@ class AgentRun:
             safety_message = safety_result["message"]
             safe = safety_result["safe"]
             if not safe:
-                return safety_message
-
-            container = client.containers.get(self.container_name)
+                return safety_message # pyright: ignore[reportReturnType]
 
             # update the container with the new limits
-            container.update(
+            self.container.update(
                 cpu_quota=self.cpu_quota,
                 mem_limit=self.memory_limit,
                 memswap_limit=self.memswap_limit,
             )
             # Copy the code to the container
-            exec_result = self.copy_code_to_container(container, python_code)
+            exec_result = self.copy_code_to_container(python_code, user=user)
             successful_copy = exec_result["success"]
             message = exec_result["message"]
             if not successful_copy:
-                return message
+                return message # pyright: ignore[reportReturnType]
 
-            script_name = message
+            script_name = message # pyright: ignore[reportAssignmentType]
 
             # Install dependencies in the container
             dependencies = self.parse_dependencies(python_code)
@@ -569,19 +652,19 @@ class AgentRun:
                 for ignore in ignore_dependencies:
                     if ignore in dependencies:
                         dependencies.remove(ignore)
-            dep_install_result, installed_deps = self.install_dependencies(container, dependencies)
+            dep_install_result, installed_deps = self.install_dependencies(dependencies)
             if dep_install_result != "Dependencies installed successfully.":
                 return dep_install_result
 
             try:
                 _, output = self.execute_command_in_container(
-                    container, f"python /home/pythonuser/{script_name}", timeout_seconds
+                    f"python /home/pythonuser/{script_name}", timeout_seconds
                 )
             except self.CommandTimeout:
                 return "Execution timed out."
 
         except Exception as e:
-            return str(e)
+            return ''.join(traceback.format_exception(None, e, e.__traceback__))
 
         finally:
             if container and script_name and len(installed_deps) > 0:

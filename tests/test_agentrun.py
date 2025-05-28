@@ -2,6 +2,7 @@ import os
 
 import docker
 import pytest
+import tempfile
 
 from agentrun_plus import AgentRun, UVInstallPolicy
 
@@ -153,7 +154,7 @@ def test_execute_code_with_timeout(code, expected, docker_container):
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL
     )
-    output = runner.execute_code_in_container(python_code=code)
+    output = runner.execute_code_in_container(python_code=code, user='root')
     assert output == expected
 
 
@@ -224,9 +225,8 @@ def test_execute_code_with_dependencies(
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL
     )
-    output = runner.execute_code_in_container(code)
+    output = runner.execute_code_in_container(code, user='root')
     assert output == expected
-
 
 @pytest.mark.parametrize(
     "code, expected",
@@ -244,9 +244,41 @@ def test_execute_code_in_container(code, expected, docker_container):
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL
     )
-    output = runner.execute_code_in_container(code)
+    output = runner.execute_code_in_container(code, user='root')
     assert output == expected
 
+def test_file_copy(docker_container):
+    runner = AgentRun(
+        container_name=docker_container.name,
+        install_policy=TestUVInstallPolicy(),
+        log_level=LOG_LEVEL
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+
+        # setup paths ...
+        file_in_path = os.path.join(tmpdir, 'in', 'file.txt')
+        os.makedirs(os.path.dirname(file_in_path), exist_ok=True)
+        file_out_path = os.path.join(tmpdir, 'out', 'file.txt')
+        os.makedirs(os.path.dirname(file_out_path), exist_ok=True)
+
+        with open(file_in_path, 'wt') as f:
+            f.write('Hello, World!')
+        # copy the file to container in the user's base folder.
+        runner.copy_file_to_container(
+                src_path=file_in_path, 
+                dst_folder='/home/pythonuser', 
+                user='root'
+        )
+        # copy it back to tmpdir.
+        runner.copy_file_from_container(
+                src_path=os.path.join('/home/pythonuser/file.txt'),
+                dst_folder=os.path.dirname(file_out_path)
+        )
+        # verify contents.
+        with open(file_in_path, 'rt') as fin, open(file_out_path, 'rt') as fout:
+            data_in = fin.read()
+            data_out = fout.read()
+            assert data_in == data_out
 
 def test_init_with_wrong_container_name(docker_container):
     with pytest.raises(ValueError) as excinfo:
@@ -314,7 +346,7 @@ def test_init_w_dependency_mismatch(docker_container):
 
 
 def execute_code_in_container_benchmark(runner, code):
-    output = runner.execute_code_in_container(code)
+    output = runner.execute_code_in_container(code, user='root')
     return output
 
 

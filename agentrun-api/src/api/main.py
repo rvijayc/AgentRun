@@ -46,7 +46,7 @@ async def redirect_docs():
 async def run_code(code_schema: CodeSchema):
     runner = AgentRun(
         container_name=os.environ.get("CONTAINER_NAME", "agentrun-api-python_runner-1"),
-        cached_dependencies=["requests", "yfinance"],
+        cached_dependencies=["requests"],
         default_timeout=60 * 5,
     )
     python_code = code_schema.code

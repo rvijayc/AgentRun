@@ -35,7 +35,12 @@ class InstallPolicy(abc.ABC):
         """ 
         [Optional] Specify a list of commands to run during initialization 
 
-        For example, if you are using UV, you might want to run "pip install uv".
+        For example, if you are using UV, you might want to run "pip install
+        uv" followed by commands necessary to create a new uv virtual
+        environement.
+
+        In most cases, you are better off just doing any initialization in the
+        Docker image itself in which case, don't override this.
         """
         return []
 
@@ -92,7 +97,7 @@ class PIPInstallPolicy(InstallPolicy):
     def parse_packages(self, output):
         return [ line.split()[0].lower() for line in output.splitlines() if " " in line ]
 
-def tar_safe_filter(member, path):
+def tar_safe_filter(member, _):
     """
     Safety check prior to untarring.
     """
@@ -110,12 +115,35 @@ def get_uid_gid(container, user):
         exit_code, output = container.exec_run(cmd)
         # process outputs.
         if exit_code != 0:
-            raise RuntimeError('Error when running: {cmd}!')
+            raise RuntimeError(f'Error when running "{cmd}": {output}')
         ids.append(output.decode().split()[0])
     return ids
 
 class AgentRun:
-    """Class to execute Python code in an isolated Docker container.
+    """
+    Class to execute Python code in an isolated Docker container. It makes the
+    following assumptions. 
+
+    - The docker container is setup to run using a user account instead of a
+      root-account. The default user name is "pythonuser".
+    - The user accoubt's work directory is assumed to be /home/{{user}}.
+    - The docker container is expected to be running and should be running as
+      long as the AgentRun object is alive.
+
+    Additionally, it is recommended to use the "uv" package to install
+    dependencies for your python program as it is quite fast and results in a
+    better experience. You can choose to "pip install uv" as a user in the
+    Docker image itself, along with "uv install"-ing any key dependencies
+    (typically matplotlib and friends). If not, and you are using a bare-bones
+    image specify these commands ("pip install uv", "uv install ..., etc.,)
+    either using the InstallPolicy or using the "cached_dependendencies"
+    argument.
+
+    Note that in most cases, you are better off installing dependencies within
+    the Docker image itself as it results in a faster experience. If you wish
+    to do more complex stuff like creating a new virutual environment per
+    "App", then use the InstallPolicy and "cached_dependencies" which may be
+    customized per AgentRun instance.
 
     Example usage:
         from agentrun import AgentRun\n
@@ -145,7 +173,8 @@ class AgentRun:
         memswap_limit="512m",
         client=None,
         install_policy=UVInstallPolicy(),
-        log_level='WARNING'
+        log_level='WARNING',
+        user:str="pythonuser"
     ) -> None:
 
         self.cpu_quota = cpu_quota
@@ -157,6 +186,7 @@ class AgentRun:
         # this is to allow a mock client to be passed in for testing if docker is not available (not implemented yet)
         self.client = client or docker.from_env()
         self.install_policy = install_policy
+        self.user = user
 
         # initialize logging.
         self.logger = logger.bind(name='AgentRun')
@@ -184,6 +214,13 @@ class AgentRun:
         except docker.errors.NotFound:
             raise ValueError(f"Container {self.container_name} not found.")
 
+        # get the work directory (which is the user's home directory).
+        exit_code, output = self.container.exec_run("/bin/bash -c 'echo $HOME'")
+        if exit_code != 0:
+            raise RuntimeError(f'Unable to find user\'s home folder: {output}')
+        self.workdir:str = output.decode().strip()
+        self.logger.info(f'HOME: {self.workdir}')
+
         # run any initialization commands specified.
         for command in self.install_policy.init_cmds():
             exit_code, output = self.execute_command_in_container(
@@ -196,7 +233,7 @@ class AgentRun:
                 raise ValueError(f"Failed to run: {command}.")
 
         # any package that was already installed inside the container is considered "cached"
-        exec_log = self.container.exec_run(cmd=self.install_policy.list_cmd(), workdir="/home/pythonuser")
+        exec_log = self.container.exec_run(cmd=self.install_policy.list_cmd(), workdir=self.workdir)
         exit_code, output = exec_log.exit_code, exec_log.output.decode("utf-8")
         if exit_code != 0:
             raise RuntimeError('{} failed with output: {}'.format(
@@ -275,7 +312,7 @@ class AgentRun:
 
         def target():
             nonlocal exit_code, output
-            exec_log = self.container.exec_run(cmd=cmd, workdir="/home/pythonuser")
+            exec_log = self.container.exec_run(cmd=cmd, workdir=self.workdir)
             exit_code, output = exec_log.exit_code, exec_log.output
 
         thread = Thread(target=target)
@@ -494,11 +531,10 @@ class AgentRun:
     def copy_file_to_container(
             self,
             src_path: str,
-            dst_folder: str,
-            user: str = "pythonuser"
+            dst_folder: str
     ):
-        # determine the UID and GID of "pythonuser".
-        user_uid, user_gid = get_uid_gid(self.container, user)
+        # determine the UID and GID of the user account.
+        user_uid, user_gid = get_uid_gid(self.container, self.user)
         if user_uid is None or user_gid is None:
             return {"success": False, "message": "Unable to determine UID and GID"}
 
@@ -506,7 +542,7 @@ class AgentRun:
         # as the python file.
         tar_stream = BytesIO()
         with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-            # apply UID an GID of pythonuser.
+            # apply UID an GID of the user account.
             tar_info = tar.gettarinfo(src_path)
             tar_info.uid = int(user_uid)  
             tar_info.gid = int(user_gid) 
@@ -517,6 +553,14 @@ class AgentRun:
         # write the tar stream and unarchive it using the container's put_archive.
         exec_result = self.container.put_archive(path=dst_folder, data=tar_stream)
         if exec_result:
+            # change the user to the current user account.
+            exit_code, output = self.container.exec_run(
+                    f"chown {self.user}:{self.user} {os.path.join(dst_folder, os.path.basename(src_path))}",
+                    user='root',
+                    privileged=True
+            )
+            if exit_code != 0:
+                return {"success": False, "message": f"Error (chown): {output}"}
             return {"success": True, "message": os.path.basename(src_path)}
 
         return {"success": False, "message": f"Failed to copy {src_path} to container."}
@@ -525,7 +569,6 @@ class AgentRun:
         self, 
         python_code: str,
         dst_file_path: Optional[str] = None,
-        user: str = "pythonuser"
     ) -> dict[str, Union[bool, str]]:
         """Copy Python code to the container.
         Args:
@@ -533,14 +576,14 @@ class AgentRun:
             python_code: Python code to copy
             dst_file_path: The full path of the file (ex: /path/to/file.py) to
                 copy into the container. If the destination path isn't provided,
-                then the file will be copied to /home/pythonuser/script_{uuid}.py
+                then the file will be copied to /home/{user}/script_{uuid}.py
                 using a random UUID.
         Returns:
             Success message or error message
         """
         # if a destination path isn't provided, use defaults:
         if dst_file_path is None:
-            dst_script_folder = "/home/pythonuser"
+            dst_script_folder = self.workdir
             script_name = f"script_{uuid4().hex}.py"
         else:
             dst_script_folder, script_name = os.path.split(dst_file_path)
@@ -552,7 +595,7 @@ class AgentRun:
             with open(temp_script_path, "w") as file:
                 file.write(python_code)
 
-            return self.copy_file_to_container(temp_script_path, dst_script_folder, user)
+            return self.copy_file_to_container(temp_script_path, dst_script_folder)
     
     def copy_file_from_container(
             self, 
@@ -591,8 +634,8 @@ class AgentRun:
             script_name: Name of the script to remove
         """
         if script_name:
-            os.remove(os.path.join("/tmp", script_name))
-            container.exec_run(cmd=f"rm /home/pythonuser/{script_name}", workdir="/home/pythonuser")
+            script_path = os.path.join(self.workdir, script_name)
+            container.exec_run(cmd=f"rm {script_path}", workdir=self.workdir)
             _ = self.uninstall_dependencies(dependencies)
         return None
 
@@ -600,7 +643,6 @@ class AgentRun:
                                   python_code: str, 
                                   ignore_dependencies: Optional[List[str]]=None,
                                   ignore_unsafe_functions: Optional[List[str]]=None,
-                                  user: str = "pythonuser"
     ) -> str:
         """Executes Python code in an isolated Docker container.
         This is the main function to execute Python code in a Docker container. It performs the following steps:
@@ -637,7 +679,7 @@ class AgentRun:
                 memswap_limit=self.memswap_limit,
             )
             # Copy the code to the container
-            exec_result = self.copy_code_to_container(python_code, user=user)
+            exec_result = self.copy_code_to_container(python_code)
             successful_copy = exec_result["success"]
             message = exec_result["message"]
             if not successful_copy:
@@ -657,11 +699,13 @@ class AgentRun:
                 return dep_install_result
 
             try:
+                assert script_name is not None
+                script_path = os.path.join(self.workdir, script_name)
                 _, output = self.execute_command_in_container(
-                    f"python /home/pythonuser/{script_name}", timeout_seconds
+                    f"python {script_path}", timeout_seconds
                 )
             except self.CommandTimeout:
-                return "Execution timed out."
+                return "Error: Execution timed out."
 
         except Exception as e:
             return ''.join(traceback.format_exception(None, e, e.__traceback__))

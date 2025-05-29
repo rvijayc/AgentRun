@@ -1,3 +1,11 @@
+## V0.2.9(05-29-2025)
+- Added a command to explicitly chown files copied using `put_archive`
+- Cleaned up hard-coded user and workdir references.
+
+## V0.2.8(05-28-2025)
+- Cache Docker container instead of calling `get_container` each time.
+- Added support for UID/GID setting.
+
 ## V0.2.7(05-24-2025)
 - User /home/pythonuser instead of /code in Dockerfile.
 

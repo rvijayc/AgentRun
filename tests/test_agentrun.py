@@ -1,6 +1,7 @@
 import os
 
 import docker
+import docker.errors
 import pytest
 import tempfile
 
@@ -20,9 +21,6 @@ class TestUVInstallPolicy(UVInstallPolicy):
 @pytest.fixture(scope="session")
 def docker_container():
     client = docker.from_env()
-
-    # Gets the directory of the current file (test_agentrun.py)
-    current_dir = os.path.dirname(__file__)
 
     # Create a volume to avoid creating files as root.
     volume = client.volumes.create('test-volume')
@@ -142,7 +140,7 @@ def test_safety_check(code, expected, docker_container):
         ),
         (
             "import time\ntime.sleep(3)",
-            "Execution timed out.",
+            "Error: Execution timed out.",
         ),
     ],
 )
@@ -152,9 +150,10 @@ def test_execute_code_with_timeout(code, expected, docker_container):
         default_timeout=1,
         container_name="test-container",
         install_policy=TestUVInstallPolicy(),
-        log_level=LOG_LEVEL
+        log_level=LOG_LEVEL,
+        user='root'
     )
-    output = runner.execute_code_in_container(python_code=code, user='root')
+    output = runner.execute_code_in_container(python_code=code)
     assert output == expected
 
 
@@ -223,9 +222,10 @@ def test_execute_code_with_dependencies(
         dependencies_whitelist=whitelist,
         cached_dependencies=cached,
         install_policy=TestUVInstallPolicy(),
-        log_level=LOG_LEVEL
+        log_level=LOG_LEVEL,
+        user='root'
     )
-    output = runner.execute_code_in_container(code, user='root')
+    output = runner.execute_code_in_container(code)
     assert output == expected
 
 @pytest.mark.parametrize(
@@ -242,16 +242,18 @@ def test_execute_code_in_container(code, expected, docker_container):
     runner = AgentRun(
         container_name=docker_container.name,
         install_policy=TestUVInstallPolicy(),
-        log_level=LOG_LEVEL
+        log_level=LOG_LEVEL,
+        user='root'
     )
-    output = runner.execute_code_in_container(code, user='root')
+    output = runner.execute_code_in_container(code)
     assert output == expected
 
 def test_file_copy(docker_container):
     runner = AgentRun(
         container_name=docker_container.name,
         install_policy=TestUVInstallPolicy(),
-        log_level=LOG_LEVEL
+        log_level=LOG_LEVEL,
+        user='root'
     )
     with tempfile.TemporaryDirectory() as tmpdir:
 
@@ -266,8 +268,7 @@ def test_file_copy(docker_container):
         # copy the file to container in the user's base folder.
         runner.copy_file_to_container(
                 src_path=file_in_path, 
-                dst_folder='/home/pythonuser', 
-                user='root'
+                dst_folder='/home/pythonuser'
         )
         # copy it back to tmpdir.
         runner.copy_file_from_container(
@@ -282,7 +283,7 @@ def test_file_copy(docker_container):
 
 def test_init_with_wrong_container_name(docker_container):
     with pytest.raises(ValueError) as excinfo:
-        runner = AgentRun(
+        _ = AgentRun(
                 container_name="wrong-container-name",
                 install_policy=TestUVInstallPolicy(),
                 log_level=LOG_LEVEL
@@ -294,19 +295,19 @@ def test_init_with_wrong_container_name(docker_container):
 def test_init_with_stopped_container(docker_container):
     # stop the docker_container
     docker_container.stop()
-    with pytest.raises(ValueError) as excinfo:
-        runner = AgentRun(
-                container_name=docker_container.name,
-                install_policy=TestUVInstallPolicy(),
-                log_level=LOG_LEVEL
-                )
+    with pytest.raises(ValueError):
+        _ = AgentRun(
+                    container_name=docker_container.name,
+                    install_policy=TestUVInstallPolicy(),
+                    log_level=LOG_LEVEL
+                    )
 
     assert f"Container {docker_container.name} is not running."
     docker_container.start()
 
 
 def test_init_with_docker_not_running():
-    from unittest.mock import Mock, patch
+    from unittest.mock import patch
 
     # Create a mock client that raises an exception when ping is called
     with patch("docker.DockerClient") as MockClient:
@@ -317,7 +318,7 @@ def test_init_with_docker_not_running():
 
         # Test that initializing AgentRun with this mock client raises ValueError
         with pytest.raises(RuntimeError) as excinfo:
-            runner = AgentRun(
+            _ = AgentRun(
                     container_name="any-name", 
                     client=mock_client,
                     install_policy=TestUVInstallPolicy(),
@@ -332,7 +333,7 @@ def test_init_with_docker_not_running():
 
 def test_init_w_dependency_mismatch(docker_container):
     with pytest.raises(ValueError) as excinfo:
-        runner = AgentRun(
+        _ = AgentRun(
             container_name=docker_container.name,
             dependencies_whitelist=[],
             cached_dependencies=["requests"],
@@ -346,7 +347,7 @@ def test_init_w_dependency_mismatch(docker_container):
 
 
 def execute_code_in_container_benchmark(runner, code):
-    output = runner.execute_code_in_container(code, user='root')
+    output = runner.execute_code_in_container(code)
     return output
 
 
@@ -355,7 +356,8 @@ def test_cached_dependency_benchmark(benchmark, docker_container):
         container_name=docker_container.name,
         cached_dependencies=["numpy"],
         install_policy=TestUVInstallPolicy(),
-        log_level=LOG_LEVEL
+        log_level=LOG_LEVEL,
+        user="root"
     )
     result = benchmark(
         execute_code_in_container_benchmark,
@@ -369,7 +371,8 @@ def test_dependency_benchmark(benchmark, docker_container):
     runner = AgentRun(
         container_name=docker_container.name,
         install_policy=TestUVInstallPolicy(),
-        log_level=LOG_LEVEL
+        log_level=LOG_LEVEL,
+        user="root"
     )
     result = benchmark(
         execute_code_in_container_benchmark,
@@ -384,7 +387,8 @@ def test_exception_benchmark(benchmark, docker_container):
     runner = AgentRun(
         container_name=docker_container.name,
         install_policy=TestUVInstallPolicy(),
-        log_level=LOG_LEVEL
+        log_level=LOG_LEVEL,
+        user="root"
     )
     result = benchmark(
         execute_code_in_container_benchmark,
@@ -399,7 +403,8 @@ def test_vanilla_benchmark(benchmark, docker_container):
     runner = AgentRun(
         container_name=docker_container.name,
         install_policy=TestUVInstallPolicy(),
-        log_level=LOG_LEVEL
+        log_level=LOG_LEVEL,
+        user="root"
     )
     result = benchmark(
         execute_code_in_container_benchmark,

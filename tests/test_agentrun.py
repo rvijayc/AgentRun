@@ -4,8 +4,9 @@ import docker
 import docker.errors
 import pytest
 import tempfile
+from uuid import uuid4
 
-from agentrun_plus import AgentRun, UVInstallPolicy
+from agentrun_plus import AgentRun, UVInstallPolicy, AgentRunSession
 
 LOG_LEVEL="WARNING"
 class TestUVInstallPolicy(UVInstallPolicy):
@@ -17,6 +18,17 @@ class TestUVInstallPolicy(UVInstallPolicy):
 
     def install_cmd(self, package):
         return f"uv pip install {package} --system"
+
+def check_session_clean(runner, name):
+
+    # make sure the work folder has been cleaned up.
+    workdir = os.path.join(runner.homedir, name)
+    exit_code, output = runner.execute_command_in_container(
+            f'test -d {workdir}',
+            runner.homedir
+    )
+    assert exit_code == 1
+    assert output == ''
 
 @pytest.fixture(scope="session")
 def docker_container():
@@ -121,12 +133,13 @@ def docker_container():
     ],
 )
 def test_safety_check(code, expected, docker_container):
+
     runner = AgentRun(
         container_name=docker_container.name,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL
     )
-    result = runner.safety_check(code)
+    result = runner._safety_check(code)
     assert result["safe"] == expected["safe"]
     assert result["message"] == expected["message"]
 
@@ -153,9 +166,14 @@ def test_execute_code_with_timeout(code, expected, docker_container):
         log_level=LOG_LEVEL,
         user='root'
     )
-    output = runner.execute_code_in_container(python_code=code)
+    name = uuid4().hex
+    session = runner.create_session(name)
+    output = session.execute_code(python_code=code)
+    runner.close_session(session)
     assert output == expected
 
+    # check if the session is properly cleaned-up
+    check_session_clean(runner, name)
 
 @pytest.mark.parametrize(
     "code, expected",
@@ -174,7 +192,7 @@ def test_parse_dependencies(code, expected, docker_container):
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL
     )
-    result = runner.parse_dependencies(code)
+    result = runner._parse_dependencies(code)
 
     assert sorted(result) == sorted(expected)
 
@@ -225,8 +243,16 @@ def test_execute_code_with_dependencies(
         log_level=LOG_LEVEL,
         user='root'
     )
-    output = runner.execute_code_in_container(code)
+
+    # create session.
+    name = uuid4().hex
+    session = runner.create_session(name)
+    output = session.execute_code(code)
+    runner.close_session(session)
     assert output == expected
+
+    # check if the session is properly cleaned-up
+    check_session_clean(runner, name)
 
 @pytest.mark.parametrize(
     "code, expected",
@@ -245,8 +271,14 @@ def test_execute_code_in_container(code, expected, docker_container):
         log_level=LOG_LEVEL,
         user='root'
     )
-    output = runner.execute_code_in_container(code)
+    name = uuid4().hex
+    session = runner.create_session(name)
+    output = session.execute_code(code)
+    runner.close_session(session)
     assert output == expected
+
+    # check if the session is properly cleaned-up
+    check_session_clean(runner, name)
 
 def test_file_copy(docker_container):
     runner = AgentRun(
@@ -265,6 +297,7 @@ def test_file_copy(docker_container):
 
         with open(file_in_path, 'wt') as f:
             f.write('Hello, World!')
+        
         # copy the file to container in the user's base folder.
         runner.copy_file_to_container(
                 src_path=file_in_path, 
@@ -346,8 +379,8 @@ def test_init_w_dependency_mismatch(docker_container):
 """**benchmarking**"""
 
 
-def execute_code_in_container_benchmark(runner, code):
-    output = runner.execute_code_in_container(code)
+def execute_code_in_container_benchmark(session: AgentRunSession, code):
+    output = session.execute_code(code)
     return output
 
 
@@ -359,12 +392,16 @@ def test_cached_dependency_benchmark(benchmark, docker_container):
         log_level=LOG_LEVEL,
         user="root"
     )
+    name = uuid4().hex
+    session = runner.create_session(name)
     result = benchmark(
         execute_code_in_container_benchmark,
-        runner=runner,
+        session=session,
         code="import numpy as np\nprint(np.array([1, 2, 3]))",
     )
     assert result == "[1 2 3]\n"
+    runner.close_session(session)
+    check_session_clean(runner, name)
 
 
 def test_dependency_benchmark(benchmark, docker_container):
@@ -374,13 +411,17 @@ def test_dependency_benchmark(benchmark, docker_container):
         log_level=LOG_LEVEL,
         user="root"
     )
+    name = uuid4().hex
+    session = runner.create_session(name)
     result = benchmark(
         execute_code_in_container_benchmark,
-        runner=runner,
+        session=session,
         # use requests
         code="import requests\nprint(requests.get('https://example.com').status_code)",
     )
     assert result == "200\n"
+    runner.close_session(session)
+    check_session_clean(runner, name)
 
 
 def test_exception_benchmark(benchmark, docker_container):
@@ -390,13 +431,17 @@ def test_exception_benchmark(benchmark, docker_container):
         log_level=LOG_LEVEL,
         user="root"
     )
+    name = uuid4().hex
+    session = runner.create_session(name)
     result = benchmark(
         execute_code_in_container_benchmark,
-        runner=runner,
+        session=session,
         code="print(f'{1/0}')",
     )
     ends_with = "ZeroDivisionError: division by zero\n"
     assert result.endswith(ends_with)
+    runner.close_session(session)
+    check_session_clean(runner, name)
 
 
 def test_vanilla_benchmark(benchmark, docker_container):
@@ -406,9 +451,13 @@ def test_vanilla_benchmark(benchmark, docker_container):
         log_level=LOG_LEVEL,
         user="root"
     )
+    name = uuid4().hex
+    session = runner.create_session(name)
     result = benchmark(
         execute_code_in_container_benchmark,
-        runner=runner,
+        session=session,
         code="print('Hello, World!')",
     )
     assert result == "Hello, World!\n"
+    runner.close_session(session)
+    check_session_clean(runner, name)

@@ -1,3 +1,4 @@
 fastapi==0.110.1
 uvicorn==0.29.0
-agentrun_plus>=0.2.7
+agentrun_plus>=0.2.11
+python-multipart

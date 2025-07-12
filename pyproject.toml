@@ -1,6 +1,6 @@
 [project]
 name = "agentrun_plus"
-version = "0.2.9"
+version = "0.2.11"
 description = "The easiest way to run AI or user generated python code safely in a docker container. This is a fork of the original AgentRun repo with additional customization options added."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License"
 ]
 dependencies = [
- "docker", "RestrictedPython", "loguru"
+ "docker", "RestrictedPython", "loguru", "fastapi", "uvicorn"
 ]
 
 [build-system]
@@ -33,6 +33,25 @@ Changelog = "https://github.com/rvijayc/AgentRun/releases"
 Issues = "https://github.com/rvijayc/AgentRun/issues"
 CI = "https://github.com/rvijayc/AgentRun/actions"
 
-
 [project.optional-dependencies]
-test = ["pytest", "pytest-cov", "pytest-benchmark", "mypy", "mkdocs", "mkdocs-material", 'mkdocstrings[python]', "mkdocs-jupyter"]
+test = [
+        "pytest>=7.4.0",
+        "pytest-cov>=4.1.0",
+        "pytest-mock>=3.12.0",
+        "httpx>=0.25.0",
+        "pytest-benchmark", 
+]
+docs = [
+        "mkdocs", 
+        "mkdocs-material", 
+        "mkdocstrings[python]", 
+        "mkdocs-jupyter", 
+]
+dev = [
+        "mypy", 
+]
+all = [
+    "agentrun_plus[test]",
+    "agentrun_plus[dev]",
+    "agentrun_plus[docs]"
+]

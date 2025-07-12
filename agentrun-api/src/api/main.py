@@ -1,56 +1,323 @@
-import asyncio
-import os
-from concurrent.futures import ThreadPoolExecutor
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from typing import Optional, List, Dict
+from uuid import uuid4
+import os
+import tempfile
+import shutil
+from pathlib import Path
+import logging
+import sys
 
-from agentrun_plus import AgentRun
+# Import the backend classes (assuming they're available)
+from agentrun_plus import AgentRun, AgentRunSession
 
+# Initialize FastAPI app
+app = FastAPI(title="AgentRun API", version="1.0.0")
 
-class CodeSchema(BaseModel):
-    code: str
+# Initialize the backend
+backend = AgentRun(container_name="agentrun-api-python_runner-1")
 
+# Store active sessions
+sessions: Dict[str, AgentRunSession] = {}
 
-class OutputSchema(BaseModel):
+# Create a logger for app specific messages.
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
+stream_handler = logging.StreamHandler(sys.stdout)
+log.addHandler(stream_handler)
+
+# Pydantic models for request/response
+class SessionCreateResponse(BaseModel):
+    session_id: str
+    workdir: str
+    source_path: str
+    artifact_path: str
+
+class ExecuteCodeRequest(BaseModel):
+    python_code: str
+    ignore_dependencies: Optional[List[str]] = None
+    ignore_unsafe_functions: Optional[List[str]] = None
+
+class ExecuteCodeResponse(BaseModel):
     output: str
+    success: bool
 
+class CopyFileToResponse(BaseModel):
+    message: str
+    destination_path: str
 
-app = FastAPI()
+class CopyFileFromRequest(BaseModel):
+    src_path: str
+    filename: str
 
-# allow all origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class SessionInfoResponse(BaseModel):
+    session_id: str
+    source_path: str
+    artifact_path: str
 
-
-@app.get("/v1/health/", response_model=dict)
-async def health():
-    return {
-        "status": "ok",
-    }
-
+# API Endpoints
 
 @app.get("/")
-async def redirect_docs():
-    return RedirectResponse(url="/docs")
+def root():
+    """Root endpoint with API information"""
+    return {
+        "service": "AgentRun API",
+        "version": "1.0.0",
+        "endpoints": {
+            "POST /sessions": "Create a new session",
+            "GET /sessions/{session_id}": "Get session information",
+            "DELETE /sessions/{session_id}": "Close a session",
+            "POST /sessions/{session_id}/execute": "Execute Python code",
+            "POST /sessions/{session_id}/copy-to": "Copy file to session",
+            "POST /sessions/{session_id}/copy-from": "Copy file from session"
+        }
+    }
 
+@app.post("/sessions", response_model=SessionCreateResponse)
+def create_session():
+    """Create a new session with a unique working directory"""
+    # Generate unique session ID and workdir
+    session_id = uuid4().hex
+    workdir = session_id  # Using same value for both
+    log.info(f'Creating session {session_id} ...')
+    
+    try:
+        # Create session using backend
+        session = backend.create_session(workdir=workdir)
+        
+        # Store session reference
+        sessions[session_id] = session
+        
+        return SessionCreateResponse(
+            session_id=session_id,
+            workdir=workdir,
+            source_path=session.source_path(),
+            artifact_path=session.artifact_path()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
 
-@app.post("/v1/run/", response_model=OutputSchema)
-async def run_code(code_schema: CodeSchema):
-    runner = AgentRun(
-        container_name=os.environ.get("CONTAINER_NAME", "agentrun-api-python_runner-1"),
-        cached_dependencies=["requests"],
-        default_timeout=60 * 5,
+@app.get("/sessions/{session_id}", response_model=SessionInfoResponse)
+def get_session_info(session_id: str):
+    """Get information about an existing session"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session = sessions[session_id]
+    return SessionInfoResponse(
+        session_id=session_id,
+        source_path=session.source_path(),
+        artifact_path=session.artifact_path()
     )
-    python_code = code_schema.code
-    with ThreadPoolExecutor() as executor:
-        future = executor.submit(runner.execute_code_in_container, python_code)
-        output = await asyncio.wrap_future(future)
-    return OutputSchema(output=output)
+
+@app.delete("/sessions/{session_id}")
+def close_session(session_id: str):
+    """Close a session and clean up resources"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    try:
+        session = sessions[session_id]
+        backend.close_session(session)
+        del sessions[session_id]
+        return {"message": f"Session {session_id} closed successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to close session: {str(e)}")
+
+@app.post("/sessions/{session_id}/execute", response_model=ExecuteCodeResponse)
+def execute_code(session_id: str, request: ExecuteCodeRequest):
+    """Execute Python code in the session's working directory
+    
+    Note: This endpoint returns success=True if the code execution was initiated successfully,
+    regardless of whether the Python code itself raises exceptions. Python errors/exceptions
+    will appear in the output field.
+    """
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session = sessions[session_id]
+    
+    try:
+        output = session.execute_code(
+            python_code=request.python_code,
+            ignore_dependencies=request.ignore_dependencies,
+            ignore_unsafe_functions=request.ignore_unsafe_functions
+        )
+        log.info(f'ignore_unsafe_functions = {request.ignore_unsafe_functions}')
+        # Always returns success=True because the execution itself succeeded
+        # Any Python errors/exceptions will be in the output
+        return ExecuteCodeResponse(output=output, success=True)
+    except Exception as e:
+        # This only catches errors from the execution infrastructure itself,
+        # not Python errors in the user's code
+        return ExecuteCodeResponse(output=str(e), success=False)
+
+@app.post("/sessions/{session_id}/copy-to", response_model=CopyFileToResponse)
+async def copy_file_to_session(
+    session_id: str,
+    file: UploadFile = File(...)
+):
+    """Copy a file to the session's source directory"""
+    if session_id not in sessions:
+        for idx, k in enumerate(sessions.keys()):
+            log.info(f'[{idx}] {k}')
+        raise HTTPException(status_code=404, detail="Session {session_id} not found")
+    
+    session = sessions[session_id]
+    
+    # Security check: Validate the filename
+    filename = file.filename
+    if not isinstance(filename, str):
+        raise HTTPException(status_code=500, detail=f'Invalid filename {filename}!')
+    
+    # Check for path traversal attempts in filename
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Invalid filename. Path separators and traversal attempts are not allowed"
+        )
+    
+    # Additional validation: ensure filename is safe
+    if not filename or filename.startswith('.'):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename: Filename cannot be empty or start with a dot"
+        )
+    
+    # Create a temporary file to save the upload
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        try:
+            # Save uploaded file to temporary location
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_file.flush()
+            
+            # Copy file to session using backend API
+            # The backend should place it in the source directory
+            destination = session.copy_file_to(local_path=tmp_file.name)
+            
+            # Verify the destination is within the source path
+            source_path = Path(session.source_path()).resolve()
+            dest_path = Path(destination).resolve()
+            
+            try:
+                dest_path.relative_to(source_path)
+            except ValueError:
+                # This shouldn't happen if backend is implemented correctly,
+                # but we check anyway for defense in depth
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal error: File was not placed in the correct directory"
+                )
+            
+            return CopyFileToResponse(
+                message=f"File '{file.filename}' copied successfully",
+                destination_path=destination
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to copy file: {str(e)}")
+        finally:
+            # Clean up temporary file
+            os.unlink(tmp_file.name)
+
+@app.post("/sessions/{session_id}/copy-from")
+def copy_file_from_session(session_id: str, request: CopyFileFromRequest):
+    """Copy a file from the session's artifact directory"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session = sessions[session_id]
+    
+    # Security check: Ensure the requested path is within the artifact directory
+    artifact_path = Path(session.artifact_path()).resolve()
+    requested_path = Path(request.src_path).resolve()
+    
+    # Check if the requested path is a subdirectory of artifact_path
+    try:
+        # This will raise ValueError if requested_path is not relative to artifact_path
+        requested_path.relative_to(artifact_path)
+    except ValueError:
+        # Path is outside the artifact directory
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Path must be within the session's artifact directory"
+        )
+    
+    # Additional check for path traversal attempts
+    if ".." in request.src_path:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Path traversal attempts are not allowed"
+        )
+    
+    # Create temporary directory for download
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            # Copy file from session to temporary directory
+            # copy_file_from expects a directory, not a file path
+            session.copy_file_from(
+                src_path=request.src_path,
+                local_dest_path=tmp_dir
+            )
+            
+            # The file should now be in tmp_dir with its original name
+            # Extract the filename from the source path
+            src_filename = os.path.basename(request.src_path)
+            downloaded_file_path = os.path.join(tmp_dir, src_filename)
+            
+            # Check if the file was successfully copied
+            if not os.path.exists(downloaded_file_path):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"File was not found after copy operation"
+                )
+            
+            # Read the file content into memory before the temp directory is deleted
+            with open(downloaded_file_path, 'rb') as f:
+                file_content = f.read()
+            
+            # Return the file content as a response
+            return Response(
+                content=file_content,
+                media_type='application/octet-stream',
+                headers={
+                    "Content-Disposition": f'attachment; filename="{request.filename}"'
+                }
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to copy file: {str(e)}")
+
+@app.get("/sessions")
+def list_sessions():
+    """List all active sessions"""
+    return {
+        "active_sessions": list(sessions.keys()),
+        "count": len(sessions)
+    }
+
+# Health check endpoint
+@app.get("/health")
+def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "active_sessions": len(sessions)}
+
+# Cleanup handler for server shutdown
+@app.on_event("shutdown")
+def shutdown_event():
+    """Clean up all sessions on server shutdown"""
+    for session_id, session in sessions.items():
+        try:
+            backend.close_session(session)
+        except Exception as e:
+            print(f"Error closing session {session_id}: {e}")
+    sessions.clear()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

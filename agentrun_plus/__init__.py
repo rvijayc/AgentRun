@@ -8,12 +8,13 @@ import sys
 import tarfile
 from io import BytesIO
 from threading import Thread
-from typing import Any, Union, List, Optional, Tuple
+from typing import Any, Union, List, Optional, Tuple, Dict
 from uuid import uuid4
 import abc
 from loguru import logger
 import json
 import tempfile
+from pathlib import Path
 
 import docker
 import docker.errors
@@ -119,6 +120,93 @@ def get_uid_gid(container, user):
         ids.append(output.decode().split()[0])
     return ids
 
+class AgentRunSession:
+
+    def __init__(self, workdir: str, root: "AgentRun"):
+
+        # session name = name of work folder.
+        self.name = workdir
+
+        self.root = root
+        self.logger = logger.bind(name='AgentRunSession')
+
+        # create the users specified work directory.
+        self.workdir = os.path.join(self.root.homedir, workdir)
+        exit_code, output = self.root.execute_command_in_container(
+                f"mkdir -p {self.workdir}",
+                workdir=self.root.homedir
+        ) 
+        if exit_code != 0:
+            raise RuntimeError(f'Cannot create workdir: {output}')
+        # ... and src and artifacts folders.
+        self.pkg_dir = os.path.join(self.workdir, 'src')
+        exit_code, output = self.root.execute_command_in_container(
+                f"mkdir -p {self.pkg_dir}",
+                workdir=self.workdir
+        ) 
+        if exit_code != 0:
+            raise RuntimeError(f'Cannot create src directory: {output}')
+        self.artifacts_dir = os.path.join(self.workdir, 'artifacts')
+        exit_code, output = self.root.execute_command_in_container(
+                f"mkdir -p {self.artifacts_dir}",
+                workdir=self.workdir
+        ) 
+        if exit_code != 0:
+            raise RuntimeError(f'Cannot create artifacts directory ({self.artifacts_dir}): {output}')
+        self.logger.info(f'Create Session: {self.workdir}')
+
+    def source_path(self) -> str:
+        return self.pkg_dir
+
+    def artifact_path(self) -> str:
+        return self.artifacts_dir
+
+    def id(self) -> str:
+        return self.name
+
+    def close(self):
+        self.root.execute_command_in_container(
+                f"rm -rf {self.workdir}",
+                workdir=self.root.homedir
+        )
+
+    def copy_file_to(self, local_path: str) -> str:
+        """
+        Copies a file specified by `local_path` into the designated package folder.
+        """
+        result = self.root.copy_file_to_container(
+                src_path=local_path,
+                dst_folder=self.pkg_dir
+        )
+        
+        if result['success'] == False:
+            raise RuntimeError(result['message'])
+        
+        return os.path.join(self.pkg_dir, os.path.basename(local_path))
+
+    def copy_file_from(self, src_path: str, local_dest_path:str):
+        
+        # check that we are not copying artifacts from another session.
+        if not is_subpath(src_path, self.workdir):
+            raise RuntimeError('Artifact folder {path} is not a subpath of {self.workdir}!')
+
+        self.root.copy_file_from_container(
+                src_path=src_path,
+                dst_folder=local_dest_path
+        )
+
+    def execute_code(self, 
+                     python_code:str,
+                     ignore_dependencies: Optional[List[str]]=None,
+                     ignore_unsafe_functions: Optional[List[str]]=None
+                     ) -> str:
+        return self.root.execute_code_in_container(
+                python_code,
+                self.workdir,
+                ignore_dependencies,
+                ignore_unsafe_functions
+        )
+        
 class AgentRun:
     """
     Class to execute Python code in an isolated Docker container. It makes the
@@ -172,7 +260,7 @@ class AgentRun:
         memory_limit="100m",
         memswap_limit="512m",
         client=None,
-        install_policy=UVInstallPolicy(),
+        install_policy:InstallPolicy=UVInstallPolicy(),
         log_level='WARNING',
         user:str="pythonuser"
     ) -> None:
@@ -214,17 +302,16 @@ class AgentRun:
         except docker.errors.NotFound:
             raise ValueError(f"Container {self.container_name} not found.")
 
-        # get the work directory (which is the user's home directory).
-        exit_code, output = self.container.exec_run("/bin/bash -c 'echo $HOME'")
-        if exit_code != 0:
-            raise RuntimeError(f'Unable to find user\'s home folder: {output}')
-        self.workdir:str = output.decode().strip()
-        self.logger.info(f'HOME: {self.workdir}')
+        # get the user's home folder.
+        self.homedir = self._get_home_dir()
+        self.logger.info(f'HOME: {self.homedir}')
 
         # run any initialization commands specified.
         for command in self.install_policy.init_cmds():
             exit_code, output = self.execute_command_in_container(
-                command, timeout=120
+                command, 
+                workdir=self.homedir,
+                timeout=120
             )
             if exit_code != 0:
                 self.logger.error(f"Failed to run {command}! See output below:")
@@ -233,7 +320,7 @@ class AgentRun:
                 raise ValueError(f"Failed to run: {command}.")
 
         # any package that was already installed inside the container is considered "cached"
-        exec_log = self.container.exec_run(cmd=self.install_policy.list_cmd(), workdir=self.workdir)
+        exec_log = self.container.exec_run(cmd=self.install_policy.list_cmd(), workdir=self.homedir)
         exit_code, output = exec_log.exit_code, exec_log.output.decode("utf-8")
         if exit_code != 0:
             raise RuntimeError('{} failed with output: {}'.format(
@@ -243,8 +330,8 @@ class AgentRun:
 
         # validate all cached dependencies before installing them.
         if (
-            not self.is_everything_whitelisted()
-            and not self.validate_cached_dependencies(cached_dependencies)
+            not self._is_everything_whitelisted()
+            and not self._validate_cached_dependencies(cached_dependencies)
         ):
             raise ValueError("Some cached dependencies are not in the whitelist.")
 
@@ -252,15 +339,47 @@ class AgentRun:
         # them on start-up and add them to the original list of cached
         # packages.
         if cached_dependencies:
-            self.install_dependencies(cached_dependencies)
+            self._install_dependencies(cached_dependencies)
             self.cached_dependencies.update(cached_dependencies)
+        
+        # initialize sessions.
+        self.sessions: Dict[str, AgentRunSession] = {}
+
+    def create_session(self, workdir) -> AgentRunSession:
+        
+        # check if session is already active.
+        if workdir in self.sessions:
+            raise RuntimeError(f"Session {workdir} already exists and is active!")
+
+        # create and return a session.
+        session = AgentRunSession(workdir, self)
+        self.sessions[workdir] = session
+        return session
+
+    def close_session(self, session: AgentRunSession):
+        """
+        Close an already opened session
+        """
+        session_name = session.name
+        session.close()
+        del self.sessions[session_name]
 
     class CommandTimeout(Exception):
         """Exception raised when a command execution times out."""
 
         pass
 
-    def is_everything_whitelisted(self) -> bool:
+    def _get_home_dir(self) -> str:
+        """
+        Gets the user's home directory.
+        """
+        exit_code, output = self.container.exec_run("/bin/bash -c 'echo $HOME'")
+        if exit_code != 0:
+            raise RuntimeError(f'Unable to find user\'s home folder: {output}')
+        homedir:str = output.decode().strip()
+        return homedir
+
+    def _is_everything_whitelisted(self) -> bool:
         """
         Check if everything is whitelisted.
 
@@ -269,31 +388,24 @@ class AgentRun:
         """
         return "*" in self.dependencies_whitelist
 
-    def validate_cached_dependencies(self, cached_dependencies) -> bool:
+    def _validate_cached_dependencies(self, cached_dependencies) -> bool:
         """
         Validates the cached dependencies against the whitelist.
 
         Returns:
             bool: True if all cached dependencies are whitelisted, False otherwise.
         """
-        if self.is_everything_whitelisted():
+        if self._is_everything_whitelisted():
             return True
         return all(
             dep in self.dependencies_whitelist for dep in cached_dependencies
         )
 
-    def install_cached_dependencies(self) -> None:
-        """
-        Attempts to install cached dependencies into the specified Docker container.
-        Raises:
-            ValueError: If the dependencies could not be successfully installed.
-        """
-        output, _ = self.install_dependencies(list(self.cached_dependencies))
-        if output != "Dependencies installed successfully.":
-            raise ValueError(output)
-
     def execute_command_in_container(
-        self, cmd: str, timeout: int
+        self, 
+        cmd: str, 
+        workdir: str,
+        timeout: int = 120
     ) -> tuple[Any | None, Any | str]:
         """Execute a command in a Docker container with a timeout.
 
@@ -309,10 +421,11 @@ class AgentRun:
         """
         exit_code, output = None, None
         self.logger.debug(f'[{self.container.name}] Running {cmd} ...')
+        workdir = self.homedir if workdir is None else workdir
 
         def target():
             nonlocal exit_code, output
-            exec_log = self.container.exec_run(cmd=cmd, workdir=self.workdir)
+            exec_log = self.container.exec_run(cmd=cmd, workdir=workdir)
             exit_code, output = exec_log.exit_code, exec_log.output
 
         thread = Thread(target=target)
@@ -324,7 +437,7 @@ class AgentRun:
         output = output if output is not None else b""
         return exit_code, output.decode("utf-8")
 
-    def safety_check(self, 
+    def _safety_check(self, 
                      python_code: str,
                      ignore_unsafe_functions: Optional[List[str]]=None
     ) -> dict[str, str | bool]:
@@ -437,7 +550,7 @@ class AgentRun:
 
         return result
 
-    def parse_dependencies(self, python_code: str) -> list[str]:
+    def _parse_dependencies(self, python_code: str) -> list[str]:
         """Parse Python code to find import statements and filter out standard library modules.
         This function returns a list of unique dependencies found in the code.
 
@@ -468,7 +581,7 @@ class AgentRun:
                     dependencies.append(module_name)
         return list(set(dependencies))  # Return unique dependencies
 
-    def install_dependencies(self, dependencies: list) -> Tuple[str, List[str]]:
+    def _install_dependencies(self, dependencies: list) -> Tuple[str, List[str]]:
         """Install dependencies in the container.
         Args:
             container: Docker container object
@@ -477,7 +590,7 @@ class AgentRun:
             Success message or error message
 
         """
-        everything_whitelisted = self.is_everything_whitelisted()
+        everything_whitelisted = self._is_everything_whitelisted()
 
         # Perform a pre-check to ensure all dependencies are in the whitelist (or everything is whitelisted)
         if not everything_whitelisted:
@@ -493,7 +606,9 @@ class AgentRun:
             self.logger.info(f'Installing {dep} ...')
             command = self.install_policy.install_cmd(dep)
             exit_code, output = self.execute_command_in_container(
-                command, timeout=120
+                command, 
+                workdir=self.homedir,
+                timeout=120
             )
             if exit_code != 0:
                 self.logger.error(f'{dep} installation failed! Printing stdout ...')
@@ -504,7 +619,7 @@ class AgentRun:
 
         return "Dependencies installed successfully.", installed_deps
 
-    def uninstall_dependencies(self, dependencies: list) -> str:
+    def _uninstall_dependencies(self, dependencies: list) -> str:
         """Uninstall dependencies in the container.
         Args:
             container: Docker container object
@@ -519,7 +634,9 @@ class AgentRun:
             self.logger.info(f'Uninstalling {dep} ...')
             command = self.install_policy.uninstall_cmd(dep)
             exit_code, output = self.execute_command_in_container(
-                command, timeout=120
+                command, 
+                workdir=self.homedir,
+                timeout=120
             )
             if exit_code != 0:
                 self.logger.error(f'{dep} ininstall failed! Printing stdout ...')
@@ -565,10 +682,10 @@ class AgentRun:
 
         return {"success": False, "message": f"Failed to copy {src_path} to container."}
 
-    def copy_code_to_container(
+    def _copy_code_to_container(
         self, 
         python_code: str,
-        dst_file_path: Optional[str] = None,
+        workdir: str
     ) -> dict[str, Union[bool, str]]:
         """Copy Python code to the container.
         Args:
@@ -582,11 +699,7 @@ class AgentRun:
             Success message or error message
         """
         # if a destination path isn't provided, use defaults:
-        if dst_file_path is None:
-            dst_script_folder = self.workdir
-            script_name = f"script_{uuid4().hex}.py"
-        else:
-            dst_script_folder, script_name = os.path.split(dst_file_path)
+        script_name = f"script_{uuid4().hex}.py"
 
         with tempfile.TemporaryDirectory() as tmpdir:
 
@@ -595,7 +708,7 @@ class AgentRun:
             with open(temp_script_path, "w") as file:
                 file.write(python_code)
 
-            return self.copy_file_to_container(temp_script_path, dst_script_folder)
+            return self.copy_file_to_container(temp_script_path, workdir)
     
     def copy_file_from_container(
             self, 
@@ -625,8 +738,12 @@ class AgentRun:
         assert os.path.isfile(dst_path)
         return dst_path
 
-    def clean_up(
-        self, container: Container, script_name: str, dependencies: list
+    def _clean_up(
+        self, 
+        container: Container, 
+        script_name: str, 
+        dependencies: list,
+        workdir: str
     ) -> None:
         """Clean up the container after execution.
         Args:
@@ -634,13 +751,14 @@ class AgentRun:
             script_name: Name of the script to remove
         """
         if script_name:
-            script_path = os.path.join(self.workdir, script_name)
-            container.exec_run(cmd=f"rm {script_path}", workdir=self.workdir)
-            _ = self.uninstall_dependencies(dependencies)
+            script_path = os.path.join(workdir, script_name)
+            container.exec_run(cmd=f"rm {script_path}", workdir=workdir)
+            _ = self._uninstall_dependencies(dependencies)
         return None
 
     def execute_code_in_container(self, 
                                   python_code: str, 
+                                  workdir: str,
                                   ignore_dependencies: Optional[List[str]]=None,
                                   ignore_unsafe_functions: Optional[List[str]]=None,
     ) -> str:
@@ -666,7 +784,7 @@ class AgentRun:
             timeout_seconds = self.default_timeout
 
             # check  if the code is safe to execute
-            safety_result = self.safety_check(python_code, ignore_unsafe_functions)
+            safety_result = self._safety_check(python_code, ignore_unsafe_functions)
             safety_message = safety_result["message"]
             safe = safety_result["safe"]
             if not safe:
@@ -678,8 +796,9 @@ class AgentRun:
                 mem_limit=self.memory_limit,
                 memswap_limit=self.memswap_limit,
             )
+
             # Copy the code to the container
-            exec_result = self.copy_code_to_container(python_code)
+            exec_result = self._copy_code_to_container(python_code, workdir)
             successful_copy = exec_result["success"]
             message = exec_result["message"]
             if not successful_copy:
@@ -688,21 +807,23 @@ class AgentRun:
             script_name = message # pyright: ignore[reportAssignmentType]
 
             # Install dependencies in the container
-            dependencies = self.parse_dependencies(python_code)
+            dependencies = self._parse_dependencies(python_code)
             if ignore_dependencies:
                 # remove any dependencies specified in ignore dependencies.
                 for ignore in ignore_dependencies:
                     if ignore in dependencies:
                         dependencies.remove(ignore)
-            dep_install_result, installed_deps = self.install_dependencies(dependencies)
+            dep_install_result, installed_deps = self._install_dependencies(dependencies)
             if dep_install_result != "Dependencies installed successfully.":
                 return dep_install_result
 
             try:
                 assert script_name is not None
-                script_path = os.path.join(self.workdir, script_name)
+                script_path = os.path.join(workdir, script_name)
                 _, output = self.execute_command_in_container(
-                    f"python {script_path}", timeout_seconds
+                    f"python {script_path}", 
+                    workdir=workdir,
+                    timeout=timeout_seconds
                 )
             except self.CommandTimeout:
                 return "Error: Execution timed out."
@@ -712,6 +833,13 @@ class AgentRun:
 
         finally:
             if container and script_name and len(installed_deps) > 0:
-                self.clean_up(container, script_name, installed_deps)
+                self._clean_up(container, script_name, installed_deps, workdir)
 
         return output
+
+def is_subpath(child_path, parent_path):
+    try:
+        Path(child_path).resolve().relative_to(Path(parent_path).resolve())
+        return True
+    except ValueError:
+        return False

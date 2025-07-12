@@ -160,10 +160,10 @@ class AgentRunAPIClient:
         self._handle_response(response, "Root Endpoint")
         return response.json()
 
-@pytest.fixture(scope="module")
-def api_client():
+@pytest.fixture(scope="session")
+def api_client(docker_services):
     """Create API client for tests"""
-    return AgentRunAPIClient(API_BASE_URL)
+    return AgentRunAPIClient(docker_services)
 
 @pytest.fixture
 def test_session(api_client):

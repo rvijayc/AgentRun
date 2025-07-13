@@ -53,19 +53,23 @@ def docker_services(docker_compose_file, docker_compose_project_name):
     subprocess.run(compose_cmd + ["up", "-d"], check=True)
     
     # Get the API URL (you might need to adjust this based on your docker-compose.yml)
-    api_url = os.getenv("AGENTRUN_API_URL", "http://localhost:8000")
+    api_urls = (
+            "http://localhost:5000",
+            "http://localhost:8000"
+    )
     
     # Wait for services to be ready
-    print(f"Waiting for API at {api_url} to be ready...")
-    if not wait_for_api(api_url):
-        # If services don't come up, show logs and fail
-        subprocess.run(compose_cmd + ["logs"])
-        subprocess.run(compose_cmd + ["down", "-v"])
-        pytest.exit("Docker services failed to start")
-    
+    for api_url in api_urls:
+        print(f"Waiting for API at {api_url} to be ready...")
+        if not wait_for_api(api_url):
+            # If services don't come up, show logs and fail
+            subprocess.run(compose_cmd + ["logs"])
+            subprocess.run(compose_cmd + ["down", "-v"])
+            pytest.exit("Docker services failed to start")
+        
     print("Docker services are ready!")
     
-    yield api_url
+    yield api_urls
     
     # Teardown: stop and remove containers
     print("\nStopping Docker services...")
@@ -150,9 +154,9 @@ class DockerCompose:
         self.compose_file = compose_file
         self.project_name = project_name
         self.base_cmd = [
-            "docker-compose",
+            "docker", 
+            "compose",
             "-f", self.compose_file,
-            "-p", self.project_name
         ]
     
     def up(self, detach=True, build=False):
@@ -194,9 +198,9 @@ def docker_logs_on_failure(request, docker_compose_file, docker_compose_project_
     if request.node.rep_call.failed:
         print("\n=== Docker Logs on Failure ===")
         compose_cmd = [
-            "docker-compose",
+            "docker", 
+            "compose",
             "-f", str(docker_compose_file),
-            "-p", docker_compose_project_name,
             "logs", "--tail=50"
         ]
         subprocess.run(compose_cmd)

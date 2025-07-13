@@ -3,14 +3,24 @@ services:
     build:
       context: ./ 
       dockerfile: docker/api/Dockerfile
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --log-level info
     volumes:
-      - ./src:/code 
       - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - app-network      
     ports:
       - "8000:8000"
     env_file:
       - ./.env.dev 
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      python_runner:
+        condition: service_healthy      
 
   python_runner:
     build:
@@ -18,11 +28,30 @@ services:
       dockerfile: docker/code_runner/Dockerfile
     volumes:
       - code_execution_volume:/home/pythonuser
-    command: ["tail", "-f", "/dev/null"] 
-    pids_limit: 10
+    command: uvicorn main:app --host 0.0.0.0 --port 5000 --reload --log-level info
+    networks:
+      - app-network    
+    ports:
+      - "127.0.0.1:5000:5000"
+    pids_limit: 1024
     security_opt:
       - no-new-privileges:true
     environment:
       - OPENBLAS_NUM_THREADS=1 # this specifically for a numpy bug. See: https://github.com/Jonathan-Adly/AgentRun/issues/7#issue-2306842471
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 volumes:
   code_execution_volume:
+
+networks:
+  app-network:
+    driver: bridge
+    internal: false  # Allow internet access for package installation
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16

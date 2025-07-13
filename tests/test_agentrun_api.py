@@ -8,9 +8,6 @@ from typing import Optional, List, Dict, Set
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
-# Configuration
-API_BASE_URL = os.getenv("AGENTRUN_API_URL", "http://localhost:8000")
-
 @dataclass
 class TestSession:
     """Helper class to track test sessions"""
@@ -163,7 +160,8 @@ class AgentRunAPIClient:
 @pytest.fixture(scope="session")
 def api_client(docker_services):
     """Create API client for tests"""
-    return AgentRunAPIClient(docker_services)
+    _, api_url = docker_services
+    return AgentRunAPIClient(api_url)
 
 @pytest.fixture
 def test_session(api_client):

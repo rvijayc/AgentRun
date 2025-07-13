@@ -1,12 +1,11 @@
 """AgentRun - Run Python code in an isolated Docker container"""
 
+import pdb
 import ast
 import traceback
 import warnings
 import os
 import sys
-import tarfile
-from io import BytesIO
 from threading import Thread
 from typing import Any, Union, List, Optional, Tuple, Dict
 from uuid import uuid4
@@ -17,9 +16,9 @@ import tempfile
 from pathlib import Path
 
 import docker
-import docker.errors
-from docker.models.containers import Container
 from RestrictedPython import compile_restricted
+from pydantic import BaseModel, Field
+import requests
 
 # list all packages installed in the current version of python.
 PKG_LIST_PROGRAM=r"""'import pkgutil\nfor p in pkgutil.iter_modules():\n print(p.name)'"""
@@ -133,7 +132,7 @@ class AgentRunSession:
         # create the users specified work directory.
         self.workdir = os.path.join(self.root.homedir, workdir)
         exit_code, output = self.root.execute_command_in_container(
-                f"mkdir -p {self.workdir}",
+                cmd=f"mkdir -p {self.workdir}",
                 workdir=self.root.homedir
         ) 
         if exit_code != 0:
@@ -141,14 +140,14 @@ class AgentRunSession:
         # ... and src and artifacts folders.
         self.pkg_dir = os.path.join(self.workdir, 'src')
         exit_code, output = self.root.execute_command_in_container(
-                f"mkdir -p {self.pkg_dir}",
+                cmd=f"mkdir -p {self.pkg_dir}",
                 workdir=self.workdir
         ) 
         if exit_code != 0:
             raise RuntimeError(f'Cannot create src directory: {output}')
         self.artifacts_dir = os.path.join(self.workdir, 'artifacts')
         exit_code, output = self.root.execute_command_in_container(
-                f"mkdir -p {self.artifacts_dir}",
+                cmd=f"mkdir -p {self.artifacts_dir}",
                 workdir=self.workdir
         ) 
         if exit_code != 0:
@@ -207,6 +206,141 @@ class AgentRunSession:
                 ignore_unsafe_functions
         )
         
+# Pydantic models for requests
+class CommandRequest(BaseModel):
+    command: str = Field(..., min_length=1, description="Shell command to execute")
+    working_dir: Optional[str] = Field(None, description="Working directory for command execution")
+    timeout: int = Field(30, ge=1, le=300, description="Timeout in seconds")
+
+class PythonCodeRequest(BaseModel):
+    code: str = Field(..., min_length=1, description="Python code to execute")
+    working_dir: Optional[str] = Field(None, description="Working directory for command execution")
+    timeout: int = Field(30, ge=1, le=300, description="Timeout in seconds")
+
+class FileUploadRequest(BaseModel):
+    destination: str = Field(..., min_length=1, description="Destination path for uploaded file")
+    
+class FileCopyRequest(BaseModel):
+    source: str = Field(..., min_length=1, description="Source file path")
+    destination: str = Field(..., min_length=1, description="Destination file path")
+
+# Pydantic models for responses
+class BaseResponse(BaseModel):
+    success: bool
+    execution_time: Optional[float] = None
+
+class CommandResponse(BaseResponse):
+    stdout: str
+    stderr: str
+    return_code: int
+
+class PythonCodeResponse(BaseResponse):
+    stdout: str
+    stderr: str
+    result: Optional[str] = None
+
+class FileOperationResponse(BaseResponse):
+    message: str
+    file_path: Optional[str] = None
+
+class HealthResponse(BaseModel):
+    status: str
+    sandbox_dir: str
+    python_version: str
+    working_directory: str
+
+class FileInfo(BaseModel):
+    name: str
+    type: str  # "file" or "directory"
+    size: Optional[int] = None
+    path: str
+
+class FileListResponse(BaseModel):
+    files: list[FileInfo]
+    directory: str
+
+class RunnerClient:
+    def __init__(self, base_url: str = "http://localhost:8000"):
+        self.base_url = base_url.rstrip('/')
+        self.session = requests.Session()
+        
+    def execute_command(self, request: CommandRequest) -> CommandResponse:
+        """Execute a unix command"""
+        response = self.session.post(
+            f"{self.base_url}/execute-command", 
+            json=request.model_dump()
+        )
+        response.raise_for_status()
+        return CommandResponse(**response.json())
+    
+    def execute_python(self, request: PythonCodeRequest) -> PythonCodeResponse:
+        """Execute Python code"""
+        response = self.session.post(
+            f"{self.base_url}/execute-python", 
+            json=request.model_dump()
+        )
+        response.raise_for_status()
+        return PythonCodeResponse(**response.json())
+    
+    def upload_file(self, local_path: str, upload_request: FileUploadRequest) -> FileOperationResponse:
+        """Upload a local file to the sandbox"""
+        with open(local_path, 'rb') as f:
+            files = {'file': f}
+            data = upload_request.model_dump()
+            response = self.session.post(
+                f"{self.base_url}/upload-file", 
+                files=files, 
+                data=data
+            )
+        response.raise_for_status()
+        return FileOperationResponse(**response.json())
+    
+    def download_file(self, file_path: str, local_destination: str) -> bool:
+        """Download a file from the sandbox"""
+        response = self.session.get(
+            f"{self.base_url}/download-file", 
+            params={'file_path': file_path}
+        )
+        if response.status_code == 200:
+            with open(local_destination, 'wb') as f:
+                f.write(response.content)
+            return True
+        response.raise_for_status()
+        return False
+    
+    def copy_file(self, copy_request: FileCopyRequest) -> FileOperationResponse:
+        """Copy a file within the sandbox"""
+        response = self.session.post(
+            f"{self.base_url}/copy-file", 
+            params=copy_request.model_dump()
+        )
+        response.raise_for_status()
+        return FileOperationResponse(**response.json())
+    
+    def list_files(self, directory: str = "") -> FileListResponse:
+        """List files in a directory"""
+        response = self.session.get(
+            f"{self.base_url}/list-files", 
+            params={'directory': directory}
+        )
+        response.raise_for_status()
+        return FileListResponse(**response.json())
+    
+    def delete_file(self, file_path: str) -> FileOperationResponse:
+        """Delete a file or directory"""
+        response = self.session.delete(
+            f"{self.base_url}/delete-file", 
+            params={'file_path': file_path}
+        )
+        response.raise_for_status()
+        return FileOperationResponse(**response.json())
+    
+    def health_check(self) -> HealthResponse:
+        """Check server health"""
+        response = self.session.get(f"{self.base_url}/health")
+        response.raise_for_status()
+        return HealthResponse(**response.json())
+
 class AgentRun:
     """
     Class to execute Python code in an isolated Docker container. It makes the
@@ -252,7 +386,7 @@ class AgentRun:
 
     def __init__(
         self,
-        container_name,
+        container_url,
         dependencies_whitelist=["*"],
         cached_dependencies=[],
         cpu_quota=50000,
@@ -269,7 +403,7 @@ class AgentRun:
         self.default_timeout = default_timeout
         self.memory_limit = memory_limit
         self.memswap_limit = memswap_limit
-        self.container_name = container_name
+        self.container_url = container_url
         self.dependencies_whitelist = dependencies_whitelist
         # this is to allow a mock client to be passed in for testing if docker is not available (not implemented yet)
         self.client = client or docker.from_env()
@@ -288,19 +422,8 @@ class AgentRun:
             enqueue=True  # Enables async behavior
         )
 
-        try:
-            self.client = client or docker.from_env()
-            self.client.ping()
-        except docker.errors.DockerException as e:
-            raise RuntimeError(
-                f"Failed to connect to Docker daemon. Please make sure Docker is running. {e}"
-            )
-        try:
-            self.container = self.client.containers.get(self.container_name)
-            if self.container.status != "running":
-                raise ValueError(f"Container {self.container_name} is not running.")
-        except docker.errors.NotFound:
-            raise ValueError(f"Container {self.container_name} not found.")
+        self.client = RunnerClient(self.container_url)
+        self.client.health_check()
 
         # get the user's home folder.
         self.homedir = self._get_home_dir()
@@ -320,8 +443,7 @@ class AgentRun:
                 raise ValueError(f"Failed to run: {command}.")
 
         # any package that was already installed inside the container is considered "cached"
-        exec_log = self.container.exec_run(cmd=self.install_policy.list_cmd(), workdir=self.homedir)
-        exit_code, output = exec_log.exit_code, exec_log.output.decode("utf-8")
+        exit_code, output = self.execute_command_in_container(cmd=self.install_policy.list_cmd(), workdir=self.homedir)
         if exit_code != 0:
             raise RuntimeError('{} failed with output: {}'.format(
                 self.install_policy.list_cmd(), output))
@@ -373,11 +495,13 @@ class AgentRun:
         """
         Gets the user's home directory.
         """
-        exit_code, output = self.container.exec_run("/bin/bash -c 'echo $HOME'")
+        exit_code, output = self.execute_command_in_container(
+                cmd="/bin/bash -c 'echo $HOME'",
+                workdir='.'
+        )
         if exit_code != 0:
             raise RuntimeError(f'Unable to find user\'s home folder: {output}')
-        homedir:str = output.decode().strip()
-        return homedir
+        return output.strip()
 
     def _is_everything_whitelisted(self) -> bool:
         """
@@ -420,13 +544,17 @@ class AgentRun:
 
         """
         exit_code, output = None, None
-        self.logger.debug(f'[{self.container.name}] Running {cmd} ...')
+        self.logger.debug(f'[{self.container_url}] Running {cmd} ...')
         workdir = self.homedir if workdir is None else workdir
 
         def target():
             nonlocal exit_code, output
-            exec_log = self.container.exec_run(cmd=cmd, workdir=workdir)
-            exit_code, output = exec_log.exit_code, exec_log.output
+            response:CommandResponse = self.client.execute_command(CommandRequest(
+                command=cmd,
+                working_dir=workdir,
+                timeout=timeout
+            ))
+            exit_code, output = response.return_code, response.stdout + response.stderr
 
         thread = Thread(target=target)
         thread.start()
@@ -435,7 +563,7 @@ class AgentRun:
             thread.join(1)
             raise self.CommandTimeout("Command timed out")
         output = output if output is not None else b""
-        return exit_code, output.decode("utf-8")
+        return exit_code, output
 
     def _safety_check(self, 
                      python_code: str,
@@ -650,37 +778,13 @@ class AgentRun:
             src_path: str,
             dst_folder: str
     ):
-        # determine the UID and GID of the user account.
-        user_uid, user_gid = get_uid_gid(self.container, self.user)
-        if user_uid is None or user_gid is None:
-            return {"success": False, "message": "Unable to determine UID and GID"}
-
-        # create a tar stream containing the python file with the same name
-        # as the python file.
-        tar_stream = BytesIO()
-        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-            # apply UID an GID of the user account.
-            tar_info = tar.gettarinfo(src_path)
-            tar_info.uid = int(user_uid)  
-            tar_info.gid = int(user_gid) 
-            # add the file to archive.
-            tar.add(src_path, arcname=os.path.basename(src_path))
-        tar_stream.seek(0)
-
-        # write the tar stream and unarchive it using the container's put_archive.
-        exec_result = self.container.put_archive(path=dst_folder, data=tar_stream)
-        if exec_result:
-            # change the user to the current user account.
-            exit_code, output = self.container.exec_run(
-                    f"chown {self.user}:{self.user} {os.path.join(dst_folder, os.path.basename(src_path))}",
-                    user='root',
-                    privileged=True
-            )
-            if exit_code != 0:
-                return {"success": False, "message": f"Error (chown): {output}"}
-            return {"success": True, "message": os.path.basename(src_path)}
-
-        return {"success": False, "message": f"Failed to copy {src_path} to container."}
+        result: FileOperationResponse = self.client.upload_file(src_path, FileUploadRequest(
+            destination=os.path.join(dst_folder, os.path.basename(src_path))
+        ))
+        return {
+            "success": result.success, 
+            "message": result.file_path
+        }
 
     def _copy_code_to_container(
         self, 
@@ -716,31 +820,17 @@ class AgentRun:
             dst_folder: str
             ) -> str:
 
-        # get the archive
-        stream, _ = self.container.get_archive(src_path)
-        with tempfile.NamedTemporaryFile(delete=False) as tmpfp:
-            try:
-                # write the tar stream on to a temporary file ...
-                for chunk in stream:
-                    tmpfp.write(chunk)
-                # close it (the file won't get deleted).
-                tmpfp.close()
-
-                # extract it.
-                with tarfile.open(tmpfp.name) as tar:
-                    tar.extractall(dst_folder, filter=tar_safe_filter)
-            finally:
-                # delete the tar file eventually.
-                os.unlink(tmpfp.name)
-
-        # return the destination file name.
         dst_path = os.path.join(dst_folder, os.path.basename(src_path))
+        result = self.client.download_file(
+                file_path=src_path,
+                local_destination=dst_path
+        )
+        assert result
         assert os.path.isfile(dst_path)
         return dst_path
 
     def _clean_up(
         self, 
-        container: Container, 
         script_name: str, 
         dependencies: list,
         workdir: str
@@ -752,7 +842,7 @@ class AgentRun:
         """
         if script_name:
             script_path = os.path.join(workdir, script_name)
-            container.exec_run(cmd=f"rm {script_path}", workdir=workdir)
+            self.execute_command_in_container(cmd=f"rm -f {script_path}", workdir=workdir)
             _ = self._uninstall_dependencies(dependencies)
         return None
 
@@ -776,7 +866,6 @@ class AgentRun:
         Returns:
             Output of the code execution or an error message
         """
-        container = None
         installed_deps = []
         script_name: Optional[str] = None
         try:
@@ -789,13 +878,6 @@ class AgentRun:
             safe = safety_result["safe"]
             if not safe:
                 return safety_message # pyright: ignore[reportReturnType]
-
-            # update the container with the new limits
-            self.container.update(
-                cpu_quota=self.cpu_quota,
-                mem_limit=self.memory_limit,
-                memswap_limit=self.memswap_limit,
-            )
 
             # Copy the code to the container
             exec_result = self._copy_code_to_container(python_code, workdir)
@@ -832,8 +914,8 @@ class AgentRun:
             return ''.join(traceback.format_exception(None, e, e.__traceback__))
 
         finally:
-            if container and script_name and len(installed_deps) > 0:
-                self._clean_up(container, script_name, installed_deps, workdir)
+            if script_name and len(installed_deps) > 0:
+                self._clean_up(script_name, installed_deps, workdir)
 
         return output
 

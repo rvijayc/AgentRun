@@ -10,14 +10,7 @@ from agentrun_plus import AgentRun, UVInstallPolicy, AgentRunSession
 
 LOG_LEVEL="WARNING"
 class TestUVInstallPolicy(UVInstallPolicy):
-    
-    def init_cmds(self):
-        return [
-                "pip install uv",
-        ]
-
-    def install_cmd(self, package):
-        return f"uv pip install {package} --system"
+    pass
 
 def check_session_clean(runner, name):
 
@@ -132,10 +125,11 @@ def docker_container():
         ),
     ],
 )
-def test_safety_check(code, expected, docker_container):
+def test_safety_check(code, expected, docker_services):
 
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL
     )
@@ -157,11 +151,12 @@ def test_safety_check(code, expected, docker_container):
         ),
     ],
 )
-def test_execute_code_with_timeout(code, expected, docker_container):
+def test_execute_code_with_timeout(code, expected, docker_services):
 
+    runner_url, _ = docker_services
     runner = AgentRun(
         default_timeout=1,
-        container_name="test-container",
+        container_url=runner_url,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL,
         user='root'
@@ -186,16 +181,16 @@ def test_execute_code_with_timeout(code, expected, docker_container):
         ("from scipy.optimize import minimize", ["scipy"]),
     ],
 )
-def test_parse_dependencies(code, expected, docker_container):
+def test_parse_dependencies(code, expected, docker_services):
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL
     )
     result = runner._parse_dependencies(code)
 
     assert sorted(result) == sorted(expected)
-
 
 @pytest.mark.parametrize(
     "code, expected, whitelist, cached",
@@ -233,10 +228,11 @@ def test_parse_dependencies(code, expected, docker_container):
     ],
 )
 def test_execute_code_with_dependencies(
-    code, expected, whitelist, cached, docker_container
+    code, expected, whitelist, cached, docker_services
 ):
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         dependencies_whitelist=whitelist,
         cached_dependencies=cached,
         install_policy=TestUVInstallPolicy(),
@@ -264,9 +260,10 @@ def test_execute_code_with_dependencies(
         ("import os\nos.system('rm -rf /')", "Unsafe module import: os"),
     ],
 )
-def test_execute_code_in_container(code, expected, docker_container):
+def test_execute_code_in_container(code, expected, docker_services):
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL,
         user='root'
@@ -280,9 +277,10 @@ def test_execute_code_in_container(code, expected, docker_container):
     # check if the session is properly cleaned-up
     check_session_clean(runner, name)
 
-def test_file_copy(docker_container):
+def test_file_copy(docker_services):
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL,
         user='root'
@@ -314,67 +312,27 @@ def test_file_copy(docker_container):
             data_out = fout.read()
             assert data_in == data_out
 
-def test_init_with_wrong_container_name(docker_container):
-    with pytest.raises(ValueError) as excinfo:
+def test_init_with_wrong_container_name(docker_services):
+
+    from requests.sessions import InvalidSchema
+    with pytest.raises(InvalidSchema) as excinfo:
         _ = AgentRun(
-                container_name="wrong-container-name",
+                container_url='101.101.101.101:1234',
                 install_policy=TestUVInstallPolicy(),
                 log_level=LOG_LEVEL
                 )
 
-    assert "Container wrong-container-name not found" in str(excinfo.value)
-
-
-def test_init_with_stopped_container(docker_container):
-    # stop the docker_container
-    docker_container.stop()
-    with pytest.raises(ValueError):
-        _ = AgentRun(
-                    container_name=docker_container.name,
-                    install_policy=TestUVInstallPolicy(),
-                    log_level=LOG_LEVEL
-                    )
-
-    assert f"Container {docker_container.name} is not running."
-    docker_container.start()
-
-
-def test_init_with_docker_not_running():
-    from unittest.mock import patch
-
-    # Create a mock client that raises an exception when ping is called
-    with patch("docker.DockerClient") as MockClient:
-        mock_client = MockClient.return_value
-        mock_client.ping.side_effect = docker.errors.DockerException(
-            "Docker daemon not available"
-        )
-
-        # Test that initializing AgentRun with this mock client raises ValueError
-        with pytest.raises(RuntimeError) as excinfo:
-            _ = AgentRun(
-                    container_name="any-name", 
-                    client=mock_client,
-                    install_policy=TestUVInstallPolicy(),
-                    log_level=LOG_LEVEL
-                    )
-
-        assert (
-            "Failed to connect to Docker daemon. Please make sure Docker is running. Docker daemon not available"
-            in str(excinfo.value)
-        )
-
-
-def test_init_w_dependency_mismatch(docker_container):
+def test_init_w_dependency_mismatch(docker_services):
+    runner_url, _ = docker_services
     with pytest.raises(ValueError) as excinfo:
         _ = AgentRun(
-            container_name=docker_container.name,
+            container_url=runner_url,
             dependencies_whitelist=[],
             cached_dependencies=["requests"],
             install_policy=TestUVInstallPolicy(),
             log_level=LOG_LEVEL
         )
     assert "Some cached dependencies are not in the whitelist." in str(excinfo.value)
-
 
 """**benchmarking**"""
 
@@ -384,9 +342,10 @@ def execute_code_in_container_benchmark(session: AgentRunSession, code):
     return output
 
 
-def test_cached_dependency_benchmark(benchmark, docker_container):
+def test_cached_dependency_benchmark(benchmark, docker_services):
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         cached_dependencies=["numpy"],
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL,
@@ -404,9 +363,10 @@ def test_cached_dependency_benchmark(benchmark, docker_container):
     check_session_clean(runner, name)
 
 
-def test_dependency_benchmark(benchmark, docker_container):
+def test_dependency_benchmark(benchmark, docker_services):
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL,
         user="root"
@@ -424,9 +384,10 @@ def test_dependency_benchmark(benchmark, docker_container):
     check_session_clean(runner, name)
 
 
-def test_exception_benchmark(benchmark, docker_container):
+def test_exception_benchmark(benchmark, docker_services):
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL,
         user="root"
@@ -444,9 +405,10 @@ def test_exception_benchmark(benchmark, docker_container):
     check_session_clean(runner, name)
 
 
-def test_vanilla_benchmark(benchmark, docker_container):
+def test_vanilla_benchmark(benchmark, docker_services):
+    runner_url, _ = docker_services
     runner = AgentRun(
-        container_name=docker_container.name,
+        container_url=runner_url,
         install_policy=TestUVInstallPolicy(),
         log_level=LOG_LEVEL,
         user="root"

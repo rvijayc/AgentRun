@@ -1,4 +1,5 @@
 fastapi==0.110.1
 uvicorn==0.29.0
 agentrun_plus>=0.2.11
-python-multipart
+python-multipart==0.0.6
+pydantic==2.5.0

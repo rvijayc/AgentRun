@@ -5,10 +5,11 @@ import docker.errors
 import pytest
 import tempfile
 from uuid import uuid4
+import logging
 
 from agentrun_plus.api.backend import AgentRun, UVInstallPolicy, AgentRunSession
 
-LOG_LEVEL="WARNING"
+LOG_LEVEL=logging.INFO
 class TestUVInstallPolicy(UVInstallPolicy):
     pass
 
@@ -377,7 +378,7 @@ def test_dependency_benchmark(benchmark, docker_services):
         execute_code_in_container_benchmark,
         session=session,
         # use requests
-        code="import requests\nprint(requests.get('https://example.com').status_code)",
+        code="import requests\nprint(requests.get('http://localhost:5000').status_code)",
     )
     assert result == "200\n"
     runner.close_session(session)

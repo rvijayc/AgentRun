@@ -1,18 +1,22 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 import subprocess
 import os
 import shutil
-import tempfile
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any
-import json
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
 import traceback
 import logging
+
+from api import (
+        CommandRequest, 
+        CommandResponse,
+        FileOperationResponse,
+        PythonCodeRequest,
+        PythonCodeResponse
+)
 
 # Create a logger for app specific messages.
 log = logging.getLogger(__name__)
@@ -25,36 +29,6 @@ log.addHandler(stream_handler)
 
 app = FastAPI(title="Sandbox Server", description="Secure sandbox for executing commands and Python code")
 
-# Base models for request/response
-class CommandRequest(BaseModel):
-    command: str
-    working_dir: Optional[str] = None
-    timeout: Optional[int] = 30
-
-class CommandResponse(BaseModel):
-    success: bool
-    stdout: str
-    stderr: str
-    return_code: int
-    execution_time: float
-
-class PythonCodeRequest(BaseModel):
-    code: str
-    working_dir: Optional[str] = None
-    timeout: Optional[int] = 30
-
-class PythonCodeResponse(BaseModel):
-    success: bool
-    stdout: str
-    stderr: str
-    result: Optional[str] = None
-    execution_time: float
-
-class FileOperationResponse(BaseModel):
-    success: bool
-    message: str
-    file_path: Optional[str] = None
-
 # Configure sandbox working directory
 SANDBOX_DIR = os.getenv("SANDBOX_DIR", '/home/pythonuser')
 os.makedirs(SANDBOX_DIR, exist_ok=True)
@@ -65,11 +39,10 @@ def safe_path(path: str) -> Path:
         return Path(SANDBOX_DIR)
     
     # Convert to absolute path within sandbox
-    if os.path.isabs(path):
-        # If absolute path, treat as relative to sandbox
-        safe_path = Path(SANDBOX_DIR) / path.lstrip('/')
-    else:
+    if not os.path.isabs(path):
         safe_path = Path(SANDBOX_DIR) / path
+    else:
+        safe_path = Path(path)
     
     # Resolve and check it's within sandbox
     try:
@@ -83,6 +56,10 @@ def safe_path(path: str) -> Path:
         return resolved
     except Exception as e:
         raise ValueError(f"Invalid path {path}: {e}")
+
+# -------------------------------------------------------------
+# API Endpoints.
+# -------------------------------------------------------------
 
 @app.get("/")
 def root():
@@ -157,6 +134,7 @@ def execute_python(request: PythonCodeRequest):
     stdout_buffer = StringIO()
     stderr_buffer = StringIO()
     
+    original_cwd = None
     try:
         # Change to sandbox directory for execution
         original_cwd = os.getcwd()
@@ -205,7 +183,8 @@ def execute_python(request: PythonCodeRequest):
         )
     finally:
         # Restore original working directory
-        os.chdir(original_cwd)
+        if original_cwd:
+            os.chdir(original_cwd)
 
 @app.post("/upload-file", response_model=FileOperationResponse)
 def upload_file(
@@ -245,9 +224,11 @@ def download_file(file_path: str):
         
         # Check if file exists
         if not safe_file_path.exists():
+            log.error(f'[download-file] File does not exist: {safe_file_path}')
             raise HTTPException(status_code=404, detail="File not found")
             
         if not safe_file_path.is_file():
+            log.error(f'[download-file] Path is not a file: {safe_file_path}')
             raise HTTPException(status_code=400, detail="Path is not a file")
             
         return FileResponse(

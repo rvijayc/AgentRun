@@ -6,7 +6,7 @@ import pytest
 import tempfile
 from uuid import uuid4
 
-from agentrun_plus import AgentRun, UVInstallPolicy, AgentRunSession
+from agentrun_plus.api.backend import AgentRun, UVInstallPolicy, AgentRunSession
 
 LOG_LEVEL="WARNING"
 class TestUVInstallPolicy(UVInstallPolicy):

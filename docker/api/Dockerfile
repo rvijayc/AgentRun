@@ -16,10 +16,11 @@ COPY ./docker/api/requirements.txt /work/
 # - Edit agentrun-api/pip.conf to add this line under [global]: `find-links: /work/agentrun/dist`
 # - The following settings will ensure the installer will find the agentrun_plus
 #   distribution under /work/agentrun/dist/
-COPY ./pip.conf /work/
+COPY ./docker/api/pip.conf /work/
 # COPY ./dist /work/agentrun/dist
 RUN PIP_CONFIG_FILE=/work/pip.conf pip install -r requirements.txt
 
 WORKDIR /code
 
-COPY ./src/api/main.py /code
+COPY ./agentrun_plus/api/*.py /code
+COPY ./agentrun_plus/code_runner/api.py /code/code_runner/

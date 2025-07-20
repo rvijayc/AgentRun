@@ -23,7 +23,7 @@ def wait_for_api(url, timeout=30, interval=1):
 def docker_compose_file():
     """Path to docker-compose file"""
     # Adjust this path based on your project structure
-    return Path("agentrun-api/docker-compose.yml").resolve()
+    return Path("docker-compose.yml").resolve()
 
 @pytest.fixture(scope="session")
 def docker_compose_project_name():

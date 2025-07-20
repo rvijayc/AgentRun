@@ -1,23 +1,29 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
-from typing import Optional, List, Dict
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import Response
+from typing import Dict
 from uuid import uuid4
 import os
 import tempfile
-import shutil
 from pathlib import Path
 import logging
 import sys
 
 # Import the backend classes (assuming they're available)
-from agentrun_plus import AgentRun, AgentRunSession
+from backend import AgentRun, AgentRunSession
+from api import (
+        SessionCreateResponse,
+        ExecuteCodeRequest,
+        ExecuteCodeResponse,
+        CopyFileToResponse,
+        CopyFileFromRequest,
+        SessionInfoResponse
+)
 
 # Initialize FastAPI app
 app = FastAPI(title="AgentRun API", version="1.0.0")
 
 # Initialize the backend
-backend = AgentRun(container_name="agentrun-api-python_runner-1")
+backend = AgentRun(container_url='http://python_runner:5000')
 
 # Store active sessions
 sessions: Dict[str, AgentRunSession] = {}
@@ -28,36 +34,9 @@ log.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler(sys.stdout)
 log.addHandler(stream_handler)
 
-# Pydantic models for request/response
-class SessionCreateResponse(BaseModel):
-    session_id: str
-    workdir: str
-    source_path: str
-    artifact_path: str
-
-class ExecuteCodeRequest(BaseModel):
-    python_code: str
-    ignore_dependencies: Optional[List[str]] = None
-    ignore_unsafe_functions: Optional[List[str]] = None
-
-class ExecuteCodeResponse(BaseModel):
-    output: str
-    success: bool
-
-class CopyFileToResponse(BaseModel):
-    message: str
-    destination_path: str
-
-class CopyFileFromRequest(BaseModel):
-    src_path: str
-    filename: str
-
-class SessionInfoResponse(BaseModel):
-    session_id: str
-    source_path: str
-    artifact_path: str
-
-# API Endpoints
+# -------------------------------------
+# REST API Endpoints
+# -------------------------------------
 
 @app.get("/")
 def root():

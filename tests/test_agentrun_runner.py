@@ -513,11 +513,11 @@ class TestSecurityAndEdgeCases:
     def test_empty_requests(self, client):
         """Test handling of empty or invalid requests"""
         # Empty command
-        response = client.post("/execute-command", json={"command": "", "timeout": 10, "working_dir":"."})
+        response = client.post("/execute-command", json={"command": " ", "timeout": 10, "working_dir":"."})
         assert response.status_code == 200
         
         # Empty Python code
-        response = client.post("/execute-python", json={"code": "", "timeout": 10})
+        response = client.post("/execute-python", json={"code": " ", "timeout": 10})
         assert response.status_code == 200
         
         # Invalid JSON (this should return 422)

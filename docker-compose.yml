@@ -1,9 +1,31 @@
+# This is a docker compose file for a container system that allows a user to
+# execute arbitrary Python code (within safe limits) using a REST API.
+# 
+# The overall service is broken down into two parts:
+#
+# - python_runner: Runs arbirary unix commands as a sandbox user inside a
+#   sandbox container environment.
+# - api: Provides the client user interface and talks to the "python_runner" to
+#   execute arbirary Python code from the user.
+# 
 services:
+
+# api:
+# ----
+# This container is the exposed client interface for running python code. It
+# provides services to clients to upload files and python code into a sandbox
+# container, run the python code, and retrieve the stdout and any artifacts
+# produced by the python program. 
+#
+# It uses "python_runner" via its REST API as the sandbox to run the actual
+# python code. As such it needs access to the python_runner's REST API
+# interface.
+#
   api:
     build:
       context: ./ 
       dockerfile: docker/api/Dockerfile
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --log-level info
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
@@ -22,13 +44,23 @@ services:
       python_runner:
         condition: service_healthy      
 
+# python_runner: 
+# --------------
+# This is a sandbox container that is built with user privileges
+# and allows execution of arbitrary unix commands (which can also be used to
+# run python commands) inside a user sandbox folder. It ships with a Python
+# interpreter and standard setup of useful Python libraries such as numpy,
+# matplotlib, pandas etc.,
+#
+# It offers a REST API to the "api" container via a local interface that
+# *should* be inaccessible to anyone else besides the "api" container.
   python_runner:
     build:
       context: ./
       dockerfile: docker/code_runner/Dockerfile
     volumes:
       - code_execution_volume:/home/pythonuser
-    command: uvicorn main:app --host 0.0.0.0 --port 5000 --reload --log-level info
+    command: uvicorn main:app --host 0.0.0.0 --port 5000 --reload --log-level debug
     networks:
       - app-network    
     ports:
@@ -37,7 +69,7 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      - OPENBLAS_NUM_THREADS=1 # this specifically for a numpy bug. See: https://github.com/Jonathan-Adly/AgentRun/issues/7#issue-2306842471
+      - OPENBLAS_NUM_THREADS=1 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 15s

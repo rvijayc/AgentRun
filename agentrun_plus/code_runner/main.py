@@ -203,6 +203,7 @@ def upload_file(
         with open(dest_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
+        log.info(f'Uploaded file: {dest_path}')
         return FileOperationResponse(
             success=True,
             message=f"File uploaded successfully to {dest_path}",
@@ -221,6 +222,7 @@ def download_file(file_path: str):
     try:
         # Ensure file path is within sandbox
         safe_file_path = safe_path(file_path)
+        log.info(f'Downloading {file_path} ({safe_file_path})')
         
         # Check if file exists
         if not safe_file_path.exists():

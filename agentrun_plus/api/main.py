@@ -175,7 +175,10 @@ async def copy_file_to_session(
             
             # Copy file to session using backend API
             # The backend should place it in the source directory
-            destination = session.copy_file_to(local_path=tmp_file.name)
+            destination = session.copy_file_to(
+                    local_path=tmp_file.name,
+                    dest_file_name=file.filename
+            )
             
             # Verify the destination is within the source path
             source_path = Path(session.source_path()).resolve()
@@ -213,24 +216,28 @@ def copy_file_from_session(session_id: str, request: CopyFileFromRequest):
     
     # Security check: Ensure the requested path is within the artifact directory
     artifact_path = Path(session.artifact_path()).resolve()
-    requested_path = Path(request.src_path).resolve()
+    requested_path = Path(request.src_path)
+    log.info(f'Artifact Base: {artifact_path}, Requested Path: {requested_path}')
     
     # Check if the requested path is a subdirectory of artifact_path
     try:
         # This will raise ValueError if requested_path is not relative to artifact_path
-        requested_path.relative_to(artifact_path)
+        if requested_path.is_absolute():
+            requested_path.relative_to(artifact_path)
     except ValueError:
         # Path is outside the artifact directory
+        msg = f"Access denied: Path {requested_path} must be within the session's artifact directory {artifact_path}"
+        log.error(msg)
         raise HTTPException(
             status_code=403,
-            detail="Access denied: Path must be within the session's artifact directory"
+            detail=msg
         )
     
     # Additional check for path traversal attempts
     if ".." in request.src_path:
         raise HTTPException(
             status_code=403,
-            detail="Access denied: Path traversal attempts are not allowed"
+            detail=f"Access denied: Path traversal attempts {request.src_path} are not allowed"
         )
     
     # Create temporary directory for download

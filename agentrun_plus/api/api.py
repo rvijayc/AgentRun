@@ -91,7 +91,16 @@ class AgentRunAPIClient:
                 print("   docker logs <api-container-name>")
                 print("3. Verify the backend AgentRun class is properly initialized")
                 print("4. Check if all required dependencies are installed in the API container")
-                
+       
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            custom_message = (
+                f"HTTP Error: {response.status_code} {response.reason} | "
+                f"Message: {response.json()['detail']}"  
+            )
+            raise requests.exceptions.HTTPError(custom_message, response=response)
+
         response.raise_for_status()
     
     def create_session(self) -> SessionInfo:
@@ -174,6 +183,7 @@ class AgentRunAPIClient:
         )
         self._handle_response(response, f"Download File [{session_id}]")
         
+        dest_path = os.path.join(dest_path, filename)
         with open(dest_path, 'wb') as f:
             f.write(response.content)
         

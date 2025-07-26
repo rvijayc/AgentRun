@@ -227,23 +227,18 @@ class TestFileOperations:
         )
         
         # Download the file
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            dest_path = f.name
-        
-        try:
+        with tempfile.TemporaryDirectory() as d:
             api_client.download_file(
                 test_session.session_id,
                 f"{test_session.artifact_path}/output.txt",
-                dest_path,
+                d,
                 "downloaded.txt"
             )
             
             # Verify content
-            with open(dest_path, 'r') as f:
+            with open(os.path.join(d, "downloaded.txt"), 'r') as f:
                 content = f.read()
             assert len(content) > 0
-        finally:
-            os.unlink(dest_path)
     
     def test_download_from_nonexistent_session(self, api_client):
         """Test downloading file from non-existent session"""

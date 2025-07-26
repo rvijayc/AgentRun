@@ -15,7 +15,6 @@ import tempfile
 from pathlib import Path
 import logging
 
-import docker
 from RestrictedPython import compile_restricted
 
 try:
@@ -186,28 +185,42 @@ class AgentRunSession:
                 workdir=self.root.homedir
         )
 
-    def copy_file_to(self, local_path: str) -> str:
+    def copy_file_to(
+            self, 
+            local_path: str,
+            dest_file_name: Optional[str] = None
+    ) -> str:
         """
-        Copies a file specified by `local_path` into the designated package folder.
+        Copies a file specified by `local_path` into the designated package
+        folder with an optional name specified by dest_file_name.
         """
+        if not dest_file_name:
+            dest_file_name  = os.path.basename(local_path)
         result = self.root.copy_file_to_container(
                 src_path=local_path,
-                dst_folder=self.pkg_dir
+                dst_folder=self.pkg_dir,
+                dest_file_name=dest_file_name
         )
-        
+        self.logger.info(f'Copying {local_path} to {self.pkg_dir} using name {dest_file_name} ...')
         if result['success'] == False:
             raise RuntimeError(result['message'])
-        
-        return os.path.join(self.pkg_dir, os.path.basename(local_path))
+        return os.path.join(self.pkg_dir, dest_file_name)
 
     def copy_file_from(self, src_path: str, local_dest_path:str):
-        
-        # check that we are not copying artifacts from another session.
-        if not is_subpath(src_path, self.workdir):
-            raise RuntimeError('Artifact folder {path} is not a subpath of {self.workdir}!')
 
+        _src_path = Path(src_path)
+        _work_dir = Path(self.workdir)
+
+        # if an absolute path was passed, then it must be relative to the work folder.
+        if _src_path.is_absolute() and not is_subpath(_src_path, self.workdir):
+            raise RuntimeError(f'Artifact folder {src_path} is not a subpath of {self.workdir}!')
+        # if a relative path was passed, then make it relative to the work folder.
+        else:
+            _src_path = _work_dir/_src_path
+
+        self.logger.info(f'Downloading {_src_path} to {local_dest_path} ...')
         return self.root.copy_file_from_container(
-                src_path=src_path,
+                src_path=str(_src_path),
                 dst_folder=local_dest_path
         )
 
@@ -275,7 +288,6 @@ class AgentRun:
         default_timeout=20,
         memory_limit="100m",
         memswap_limit="512m",
-        client=None,
         install_policy:InstallPolicy=UVInstallPolicy(),
         log_level=logging.INFO,
         user:str="pythonuser"
@@ -287,8 +299,6 @@ class AgentRun:
         self.memswap_limit = memswap_limit
         self.container_url = container_url
         self.dependencies_whitelist = dependencies_whitelist
-        # this is to allow a mock client to be passed in for testing if docker is not available (not implemented yet)
-        self.client = client or docker.from_env()
         self.install_policy = install_policy
         self.user = user
 
@@ -654,11 +664,16 @@ class AgentRun:
     def copy_file_to_container(
             self,
             src_path: str,
-            dst_folder: str
+            dst_folder: str,
+            dest_file_name: Optional[str]=None
     ):
-        result: FileOperationResponse = self.client.upload_file(src_path, FileUploadRequest(
-            destination=os.path.join(dst_folder, os.path.basename(src_path))
-        ))
+        if not dest_file_name:
+            dest_file_name = os.path.basename(src_path)
+        self.logger.info(f'Uploading {src_path} to {dst_folder} using name {dest_file_name} ...')
+        result: FileOperationResponse = self.client.upload_file(
+                src_path, 
+                FileUploadRequest(destination=os.path.join(dst_folder, dest_file_name)),
+        )
         return {
             "success": result.success, 
             "message": result.file_path
@@ -799,7 +814,7 @@ class AgentRun:
 
 def is_subpath(child_path, parent_path):
     try:
-        Path(child_path).resolve().relative_to(Path(parent_path).resolve())
+        Path(child_path).relative_to(Path(parent_path))
         return True
     except ValueError:
         return False

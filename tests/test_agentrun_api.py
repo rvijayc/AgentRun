@@ -301,7 +301,7 @@ class TestFileOperations:
                     "passwd"
                 )
             assert exc_info.value.response.status_code == 403
-            assert "Path must be within the session's artifact directory" in exc_info.value.response.text
+            assert "Path traversal attempts" in exc_info.value.response.text
         finally:
             os.unlink(dest_path)
     

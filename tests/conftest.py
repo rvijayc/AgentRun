@@ -23,7 +23,7 @@ def wait_for_api(url, timeout=30, interval=1):
 def docker_compose_file():
     """Path to docker-compose file"""
     # Adjust this path based on your project structure
-    return Path("docker-compose.yml").resolve()
+    return Path("agentrun_plus/docker-compose.yml").resolve()
 
 @pytest.fixture(scope="session")
 def docker_compose_project_name():
@@ -33,7 +33,7 @@ def docker_compose_project_name():
 @pytest.fixture(scope="session")
 def docker_services(docker_compose_file, docker_compose_project_name):
     """Ensure docker-compose services are up and running"""
-    
+
     # Check if docker-compose file exists
     if not docker_compose_file.exists():
         pytest.exit(f"Docker compose file not found: {docker_compose_file}")

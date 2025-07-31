@@ -1,6 +1,6 @@
 [project]
 name = "agentrun_plus"
-version = "0.2.15"
+version = "0.2.18"
 description = "The easiest way to run AI or user generated python code safely in a docker container. This is a fork of the original AgentRun repo with additional customization options added."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,11 +21,8 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-include-package-data = false
-
-[tool.setuptools.packages.find]
-include = ["agentrun*"]
-exclude = ["agentrun-api*", "docs*", "examples*", "tests*", ".github*"]
+packages = ["agentrun_plus", "agentrun_plus.api", "agentrun_plus.code_runner"]
+include-package-data = true
 
 [project.urls]
 Homepage = "https://github.com/rvijayc/AgentRun"

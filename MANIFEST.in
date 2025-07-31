@@ -1,0 +1,3 @@
+include agentrun_plus/docker-compose.yml
+recursive-include agentrun_plus/docker Dockerfile *.txt *.conf
+include agentrun_plus/.env.dev

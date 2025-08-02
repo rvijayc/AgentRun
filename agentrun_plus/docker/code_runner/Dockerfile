@@ -19,8 +19,8 @@ WORKDIR /home/pythonuser
 # copy necessary python requirements.
 COPY --chown=pythonuser:pythonuser ./docker/code_runner/requirements.txt .
 COPY --chown=pythonuser:pythonuser ./docker/code_runner/runner_requirements.txt .
-COPY --chown=pythonuser:pythonuser ./agentrun_plus/code_runner/main.py .
-COPY --chown=pythonuser:pythonuser ./agentrun_plus/code_runner/api.py .
+COPY --chown=pythonuser:pythonuser ./code_runner/main.py .
+COPY --chown=pythonuser:pythonuser ./code_runner/api.py .
 
 # install UV, create a virtual environment and install packages.
 RUN pip install uv

@@ -37,10 +37,18 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
+# Check if first argument is the --no-push flag (incorrect usage)
+if [ "$1" = "--no-push" ]; then
+    print_error "Docker Hub username is required as the first argument"
+    print_error "Usage: $0 <DOCKERHUB_USERNAME> [--no-push]"
+    print_info "Example: $0 myusername --no-push"
+    exit 1
+fi
+
 DOCKERHUB_USERNAME="$1"
 NO_PUSH=false
 
-# Check for --no-push flag
+# Check for --no-push flag in second argument
 if [ "$2" = "--no-push" ]; then
     NO_PUSH=true
     print_warning "Running in no-push mode - images will be built and tagged but not pushed"

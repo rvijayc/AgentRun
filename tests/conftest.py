@@ -37,6 +37,7 @@ def docker_compose_project_name():
 @pytest.fixture(scope="session")
 def docker_services(docker_compose_files, docker_compose_project_name):
     """Ensure docker-compose services are up and running"""
+    workdir = str(Path(__file__).parent.parent.resolve()/"agentrun_plus")
 
     for docker_compose_file in docker_compose_files:
         # Check if docker-compose file exists
@@ -44,19 +45,17 @@ def docker_services(docker_compose_files, docker_compose_project_name):
             pytest.exit(f"Docker compose file not found: {docker_compose_file}")
     
     compose_cmd = [
-        "docker", 
-        "compose",
-        "-f", str(docker_compose_files[0]),
-        "-f", str(docker_compose_files[1]),
+        "./docker-compose.sh", 
+        "test-dev",
     ]
     
     # Pull images first (optional, but ensures you have latest)
     print("\nPulling Docker images...")
-    subprocess.run(compose_cmd + ["pull"], check=True)
+    subprocess.run(compose_cmd + ["pull"], check=True, cwd=workdir)
     
     # Start services
     print("Starting Docker services...")
-    subprocess.run(compose_cmd + ["up", "-d"], check=True)
+    subprocess.run(compose_cmd + ["up", "-d"], check=True, cwd=workdir)
     
     # Get the API URL (you might need to adjust this based on your docker-compose.yml)
     api_urls = (
@@ -69,8 +68,8 @@ def docker_services(docker_compose_files, docker_compose_project_name):
         print(f"Waiting for API at {api_url} to be ready...")
         if not wait_for_api(api_url):
             # If services don't come up, show logs and fail
-            subprocess.run(compose_cmd + ["logs"])
-            subprocess.run(compose_cmd + ["down", "-v"])
+            subprocess.run(compose_cmd + ["logs"], cwd=workdir)
+            subprocess.run(compose_cmd + ["down", "-v"], cwd=workdir)
             pytest.exit("Docker services failed to start")
         
     print("Docker services are ready!")
@@ -79,7 +78,7 @@ def docker_services(docker_compose_files, docker_compose_project_name):
     
     # Teardown: stop and remove containers
     print("\nStopping Docker services...")
-    subprocess.run(compose_cmd + ["down", "-v"])
+    subprocess.run(compose_cmd + ["down", "-v"], cwd=workdir)
 
 @pytest.fixture(scope="session")
 def api_base_url(docker_services):
@@ -201,6 +200,9 @@ def docker_logs_on_failure(request, docker_compose_files, docker_compose_project
     """Show docker logs if a test fails"""
     yield
     
+    workdir=Path(__file__)/".."/"agentrun_plus"
+    workdir = str(workdir.resolve())
+
     if request.node.rep_call.failed:
         print("\n=== Docker Logs on Failure ===")
         compose_cmd = [
@@ -210,7 +212,7 @@ def docker_logs_on_failure(request, docker_compose_files, docker_compose_project
             "-f", str(docker_compose_files[1]),
             "logs", "--tail=50"
         ]
-        subprocess.run(compose_cmd)
+        subprocess.run(compose_cmd, cwd=workdir)
 
 # Hook to add test result to node
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)

@@ -1,0 +1,15 @@
+# Production Docker Compose configuration
+# Uses pre-built images from Docker Hub
+# Usage: docker-compose -f docker-compose.base.yml -f docker-compose.prod.yml --env-file .env.prod up
+# 
+# Before using this file:
+# 1. Update DOCKERHUB_USERNAME in .env.prod with your actual Docker Hub username
+# 2. Ensure images have been pushed to Docker Hub using the deployment script
+# 3. Optionally specify a specific tag in .env.prod (default is 'latest')
+
+services:
+  api:
+    image: ${DOCKERHUB_USERNAME:-rvijayc}/agentrun-api:${IMAGE_TAG:-latest}
+
+  python_runner:
+    image: ${DOCKERHUB_USERNAME:-rvijayc}/agentrun-python-runner:${IMAGE_TAG:-latest}

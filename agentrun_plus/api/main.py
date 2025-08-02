@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 import logging
 import sys
+from contextlib import asynccontextmanager
 
 # Import the backend classes (assuming they're available)
 from backend import AgentRun, AgentRunSession
@@ -19,8 +20,20 @@ from api import (
         SessionInfoResponse
 )
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup - no specific startup logic needed for this app
+    yield
+    # Shutdown - clean up all sessions
+    for session_id, session in sessions.items():
+        try:
+            backend.close_session(session)
+        except Exception as e:
+            print(f"Error closing session {session_id}: {e}")
+    sessions.clear()
+
 # Initialize FastAPI app
-app = FastAPI(title="AgentRun API", version="1.0.0")
+app = FastAPI(title="AgentRun API", version="1.0.0", lifespan=lifespan)
 
 # Initialize the backend
 backend = AgentRun(container_url='http://python_runner:5000')
@@ -293,16 +306,6 @@ def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "active_sessions": len(sessions)}
 
-# Cleanup handler for server shutdown
-@app.on_event("shutdown")
-def shutdown_event():
-    """Clean up all sessions on server shutdown"""
-    for session_id, session in sessions.items():
-        try:
-            backend.close_session(session)
-        except Exception as e:
-            print(f"Error closing session {session_id}: {e}")
-    sessions.clear()
 
 if __name__ == "__main__":
     import uvicorn

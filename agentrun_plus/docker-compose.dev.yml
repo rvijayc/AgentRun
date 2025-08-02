@@ -1,0 +1,14 @@
+# Development Docker Compose configuration
+# Builds images locally from source code
+# Usage: docker-compose -f docker-compose.base.yml -f docker-compose.dev.yml up
+
+services:
+  api:
+    build:
+      context: ./ 
+      dockerfile: docker/api/Dockerfile
+
+  python_runner:
+    build:
+      context: ./
+      dockerfile: docker/code_runner/Dockerfile

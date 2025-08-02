@@ -1,0 +1,101 @@
+# This is a docker compose file for a container system that allows a user to
+# execute arbitrary Python code (within safe limits) using a REST API.
+# 
+# The overall service is broken down into two parts:
+#
+# - python_runner: Runs arbirary unix commands as a sandbox user inside a
+#   sandbox container environment. This runner should only be accessible from the
+#   api service.
+# - api: Provides the client user interface and talks to the "python_runner" to
+#   execute arbirary Python code from the user.  
+# 
+services:
+
+# api:
+# ----
+# This container is the exposed client interface for running python code. It
+# provides services to clients to upload files and python code into a sandbox
+# container, run the python code, and retrieve the stdout and any artifacts
+# produced by the python program. 
+#
+# It uses "python_runner" via its REST API as the sandbox to run the actual
+# python code. As such it needs access to the python_runner's REST API
+# interface.
+#
+  api:
+    build:
+      context: ./ 
+      dockerfile: docker/api/Dockerfile
+    command: python3 main.py
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - app-network      
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env.dev 
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
+    restart: unless-stopped
+    depends_on:
+      python_runner:
+        condition: service_healthy      
+
+# python_runner: 
+# --------------
+# This is a sandbox container that is built with user privileges
+# and allows execution of arbitrary unix commands (which can also be used to
+# run python commands) inside a user sandbox folder. It ships with a Python
+# interpreter and standard setup of useful Python libraries such as numpy,
+# matplotlib, pandas etc.,
+#
+# It offers a REST API to the "api" container via a local interface that
+# *should* be inaccessible to anyone else besides the "api" container.
+  python_runner:
+    build:
+      context: ./
+      dockerfile: docker/code_runner/Dockerfile
+    volumes:
+      - code_execution_volume:/home/pythonuser
+    command: python3 main.py
+    networks:
+      - app-network    
+    # For testing, use: docker-compose -f docker-compose.yml -f docker-compose.test.yml up
+    expose:
+      - "5000"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+          pids: 1024
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - OPENBLAS_NUM_THREADS=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+volumes:
+  code_execution_volume:
+
+networks:
+  app-network:
+    driver: bridge
+    internal: false  # Allow internet access for package installation
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,65 @@
+# Base Docker Compose configuration for AgentRun
+# This file contains common configuration shared across all environments
+# Use with environment-specific override files
+
+services:
+  api:
+    command: python3 main.py
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - app-network      
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
+    restart: unless-stopped
+    depends_on:
+      python_runner:
+        condition: service_healthy      
+
+  python_runner:
+    volumes:
+      - code_execution_volume:/home/pythonuser
+    command: python3 main.py
+    networks:
+      - app-network    
+    # Internal only by default - can be overridden in test configuration
+    expose:
+      - "5000"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+          pids: 1024
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - OPENBLAS_NUM_THREADS=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  code_execution_volume:
+
+networks:
+  app-network:
+    driver: bridge
+    internal: false  # Allow internet access for package installation
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16

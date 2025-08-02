@@ -1,8 +1,9 @@
-# Docker Compose override file for testing
-# Usage: docker-compose -f docker-compose.yml -f docker-compose.test.yml up
+# Testing Docker Compose configuration
+# Exposes the python_runner service externally for testing
+# Usage: docker-compose -f docker-compose.base.yml -f docker-compose.dev.yml -f docker-compose.test.yml up
+# Or for production testing: docker-compose -f docker-compose.base.yml -f docker-compose.prod.yml -f docker-compose.test.yml up
 
 services:
   python_runner:
-    # Override to expose port 5000 externally for testing
     ports:
-      - "5000:5000"
+      - "5000:5000"  # Expose python_runner for external testing

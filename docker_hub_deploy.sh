@@ -2,6 +2,7 @@
 
 # Docker Hub Deployment Script for AgentRun
 # This script builds, tags, and pushes Docker images to Docker Hub with git SHA tracking
+# Uses the modular Docker Compose structure (base + dev files for building)
 
 set -e  # Exit on any error
 
@@ -37,10 +38,18 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
+# Check if first argument is the --no-push flag (incorrect usage)
+if [ "$1" = "--no-push" ]; then
+    print_error "Docker Hub username is required as the first argument"
+    print_error "Usage: $0 <DOCKERHUB_USERNAME> [--no-push]"
+    print_info "Example: $0 myusername --no-push"
+    exit 1
+fi
+
 DOCKERHUB_USERNAME="$1"
 NO_PUSH=false
 
-# Check for --no-push flag
+# Check for --no-push flag in second argument
 if [ "$2" = "--no-push" ]; then
     NO_PUSH=true
     print_warning "Running in no-push mode - images will be built and tagged but not pushed"
@@ -72,21 +81,22 @@ if ! git diff-index --quiet HEAD --; then
 fi
 
 # Ensure we're in the right directory
-if [ ! -f "agentrun_plus/docker-compose.yml" ]; then
-    print_error "docker-compose.yml not found in agentrun_plus/. Please run from project root."
+if [ ! -f "agentrun_plus/docker-compose.base.yml" ] || [ ! -f "agentrun_plus/docker-compose.dev.yml" ]; then
+    print_error "Required compose files not found in agentrun_plus/. Please run from project root."
+    print_info "Expected files: docker-compose.base.yml, docker-compose.dev.yml"
     exit 1
 fi
 
 cd agentrun_plus
 
 print_info "Cleaning up old images and containers..."
-# Clean build - remove existing images and build cache
-docker-compose down --remove-orphans 2>/dev/null || true
+# Clean build - remove existing images and build cache using the helper script
+./docker-compose.sh dev down 2>/dev/null || true
 docker system prune -f
 
 print_info "Building images with clean cache..."
-# Build with no cache to ensure fresh builds
-docker-compose build --no-cache --pull
+# Build with no cache to ensure fresh builds using the helper script
+./docker-compose.sh dev build --no-cache --pull
 
 # Define image names
 API_IMAGE="agentrun_plus-api"
@@ -199,5 +209,11 @@ echo "  $DOCKERHUB_USERNAME/agentrun-python-runner:$BRANCH_TAG"
 if [ -n "$GIT_TAG" ]; then
     echo "  $DOCKERHUB_USERNAME/agentrun-python-runner:$VERSION_TAG"
 fi
+echo ""
+echo "To use these images in production, update .env.prod with:"
+echo "  DOCKERHUB_USERNAME=$DOCKERHUB_USERNAME"
+echo "  IMAGE_TAG=$SHA_TAG  # or latest, or $VERSION_TAG"
+echo ""
+echo "Then run: ./docker-compose.sh prod"
 
 print_success "Deployment completed successfully!"

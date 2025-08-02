@@ -20,10 +20,14 @@ def wait_for_api(url, timeout=30, interval=1):
     return False
 
 @pytest.fixture(scope="session")
-def docker_compose_file():
+def docker_compose_files():
     """Path to docker-compose file"""
     # Adjust this path based on your project structure
-    return Path("agentrun_plus/docker-compose.yml").resolve()
+    return [
+            Path("agentrun_plus/docker-compose.yml").resolve(),
+            Path("agentrun_plus/docker-compose.test.yml").resolve(),
+    ]
+
 
 @pytest.fixture(scope="session")
 def docker_compose_project_name():
@@ -31,17 +35,19 @@ def docker_compose_project_name():
     return "agentrun-test"
 
 @pytest.fixture(scope="session")
-def docker_services(docker_compose_file, docker_compose_project_name):
+def docker_services(docker_compose_files, docker_compose_project_name):
     """Ensure docker-compose services are up and running"""
 
-    # Check if docker-compose file exists
-    if not docker_compose_file.exists():
-        pytest.exit(f"Docker compose file not found: {docker_compose_file}")
+    for docker_compose_file in docker_compose_files:
+        # Check if docker-compose file exists
+        if not docker_compose_file.exists():
+            pytest.exit(f"Docker compose file not found: {docker_compose_file}")
     
     compose_cmd = [
         "docker", 
         "compose",
-        "-f", str(docker_compose_file),
+        "-f", str(docker_compose_files[0]),
+        "-f", str(docker_compose_files[1]),
     ]
     
     # Pull images first (optional, but ensures you have latest)
@@ -191,7 +197,7 @@ def api_client_with_docker(api_base_url):
 
 # For debugging: fixture to show docker logs on test failure
 @pytest.fixture(autouse=True)
-def docker_logs_on_failure(request, docker_compose_file, docker_compose_project_name):
+def docker_logs_on_failure(request, docker_compose_files, docker_compose_project_name):
     """Show docker logs if a test fails"""
     yield
     
@@ -200,7 +206,8 @@ def docker_logs_on_failure(request, docker_compose_file, docker_compose_project_
         compose_cmd = [
             "docker", 
             "compose",
-            "-f", str(docker_compose_file),
+            "-f", str(docker_compose_files[0]),
+            "-f", str(docker_compose_files[1]),
             "logs", "--tail=50"
         ]
         subprocess.run(compose_cmd)

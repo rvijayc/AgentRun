@@ -4,9 +4,10 @@
 # The overall service is broken down into two parts:
 #
 # - python_runner: Runs arbirary unix commands as a sandbox user inside a
-#   sandbox container environment.
+#   sandbox container environment. This runner should only be accessible from the
+#   api service.
 # - api: Provides the client user interface and talks to the "python_runner" to
-#   execute arbirary Python code from the user.
+#   execute arbirary Python code from the user.  
 # 
 services:
 
@@ -25,7 +26,7 @@ services:
     build:
       context: ./ 
       dockerfile: docker/api/Dockerfile
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    command: python3 main.py
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
@@ -39,7 +40,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 25s
+    restart: unless-stopped
     depends_on:
       python_runner:
         condition: service_healthy      
@@ -60,22 +62,32 @@ services:
       dockerfile: docker/code_runner/Dockerfile
     volumes:
       - code_execution_volume:/home/pythonuser
-    command: uvicorn main:app --host 0.0.0.0 --port 5000 --reload --log-level debug
+    command: python3 main.py
     networks:
       - app-network    
-    ports:
-      - "5000:5000"
-    pids_limit: 1024
+    # For testing, use: docker-compose -f docker-compose.yml -f docker-compose.test.yml up
+    expose:
+      - "5000"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+          pids: 1024
+        reservations:
+          cpus: '0.5'
+          memory: 256M
     security_opt:
       - no-new-privileges:true
     environment:
-      - OPENBLAS_NUM_THREADS=1 
+      - OPENBLAS_NUM_THREADS=1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 15s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 15s
+    restart: unless-stopped
 volumes:
   code_execution_volume:
 

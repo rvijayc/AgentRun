@@ -81,12 +81,12 @@ cd agentrun_plus
 
 print_info "Cleaning up old images and containers..."
 # Clean build - remove existing images and build cache
-docker-compose down --remove-orphans 2>/dev/null || true
+docker compose down --remove-orphans 2>/dev/null || true
 docker system prune -f
 
 print_info "Building images with clean cache..."
 # Build with no cache to ensure fresh builds
-docker-compose build --no-cache --pull
+docker compose build --no-cache --pull
 
 # Define image names
 API_IMAGE="agentrun_plus-api"

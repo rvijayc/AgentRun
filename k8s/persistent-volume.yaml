@@ -1,0 +1,31 @@
+# Persistent Volume for shared session storage
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: agentrun-shared-storage
+  namespace: agentrun
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: agentrun-shared
+  # For GKE, use Google Cloud Filestore or NFS
+  # This is a placeholder - will be updated for GKE
+  hostPath:
+    path: /tmp/agentrun-shared
+---
+# Persistent Volume Claim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentrun-shared-storage-claim
+  namespace: agentrun
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: agentrun-shared

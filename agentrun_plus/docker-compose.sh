@@ -112,7 +112,11 @@ if [[ "$ENVIRONMENT" =~ prod ]] && [ -f ".env.prod" ]; then
     print_info "Using .env.prod for production environment variables"
 fi
 
-docker compose $COMPOSE_FILES $ACTION $OPTIONS
+if ! [ -z ${DOCKER_COMPOSE_CMD} ]; then
+    ${DOCKER_COMPOSE_CMD} $COMPOSE_FILES $ACTION $OPTIONS
+else
+    docker compose $COMPOSE_FILES $ACTION $OPTIONS
+fi
 
 if [ $? -eq 0 ]; then
     print_success "Command completed successfully"

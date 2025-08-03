@@ -1,0 +1,19 @@
+# ConfigMap for AgentRun configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentrun-config
+  namespace: agentrun
+data:
+  # API Configuration
+  API_PORT: "8000"
+  
+  # Python Runner Configuration
+  PYTHON_RUNNER_PORT: "5000"
+  PYTHON_RUNNER_SERVICE: "agentrun-python-runner-service"
+  
+  # Shared storage configuration
+  SHARED_STORAGE_PATH: "/home/pythonuser"
+  
+  # Environment settings
+  OPENBLAS_NUM_THREADS: "1"

@@ -1,0 +1,67 @@
+# API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentrun-api
+  namespace: agentrun
+  labels:
+    app: agentrun
+    component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agentrun
+      component: api
+  template:
+    metadata:
+      labels:
+        app: agentrun
+        component: api
+    spec:
+      containers:
+      - name: api
+        image: yourusername/agentrun-api:latest  # Update with your Docker Hub image
+        ports:
+        - containerPort: 8000
+          name: http
+        # Environment variables
+        envFrom:
+        - configMapRef:
+            name: agentrun-config
+        env:
+        - name: PORT
+          value: "8000"
+        - name: PYTHON_RUNNER_URL
+          value: "http://agentrun-python-runner-service:5000"
+        # Volume mounts (if you decide to give API access to shared storage later)
+        # volumeMounts:
+        # - name: shared-storage
+        #   mountPath: /shared
+        # Resource limits
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+          requests:
+            cpu: 250m
+            memory: 128Mi
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      # Uncomment if you want to give API access to shared storage
+      # volumes:
+      # - name: shared-storage
+      #   persistentVolumeClaim:
+      #     claimName: agentrun-shared-storage-claim
+      restartPolicy: Always

@@ -1,0 +1,19 @@
+# Python Runner Service (Internal)
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentrun-python-runner-service
+  namespace: agentrun
+  labels:
+    app: agentrun
+    component: python-runner
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5000
+    targetPort: 5000
+    protocol: TCP
+    name: http
+  selector:
+    app: agentrun
+    component: python-runner

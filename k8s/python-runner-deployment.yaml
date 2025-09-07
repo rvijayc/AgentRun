@@ -1,0 +1,82 @@
+# Python Runner Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentrun-python-runner
+  namespace: agentrun
+  labels:
+    app: agentrun
+    component: python-runner
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agentrun
+      component: python-runner
+  template:
+    metadata:
+      labels:
+        app: agentrun
+        component: python-runner
+    spec:
+      # Security context for the entire pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: python-runner
+        image: yourusername/agentrun-python-runner:latest  # Update with your Docker Hub image
+        ports:
+        - containerPort: 5000
+          name: http
+        # Security context for the container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false  # Python needs to write to temp dirs
+          capabilities:
+            drop:
+            - ALL
+        # Environment variables
+        envFrom:
+        - configMapRef:
+            name: agentrun-config
+        env:
+        - name: PORT
+          value: "5000"
+        # Volume mounts
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /home/pythonuser
+        - name: tmp-storage
+          mountPath: /tmp
+        # Resource limits (similar to Docker setup)
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 1Gi
+          requests:
+            cpu: 500m
+            memory: 256Mi
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: shared-storage
+        persistentVolumeClaim:
+          claimName: agentrun-shared-storage-claim
+      - name: tmp-storage
+        emptyDir: {}
+      # Restart policy
+      restartPolicy: Always

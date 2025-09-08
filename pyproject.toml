@@ -1,6 +1,6 @@
 [project]
 name = "agentrun_plus"
-version = "0.2.21"
+version = "0.2.22"
 description = "The easiest way to run AI or user generated python code safely in a docker container. This is a fork of the original AgentRun repo with additional customization options added."
 readme = "README.md"
 requires-python = ">=3.10"

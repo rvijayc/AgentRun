@@ -9,7 +9,7 @@
 
 services:
   api:
-    image: ${DOCKERHUB_USERNAME:-rvijayc}/agentrun-api:${IMAGE_TAG:-latest}
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKERHUB_USERNAME:-rvijayc}/agentrun-api:${IMAGE_TAG:-latest}
 
   python_runner:
-    image: ${DOCKERHUB_USERNAME:-rvijayc}/agentrun-python-runner:${IMAGE_TAG:-latest}
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKERHUB_USERNAME:-rvijayc}/agentrun-python-runner:${IMAGE_TAG:-latest}

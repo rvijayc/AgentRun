@@ -228,7 +228,7 @@ class AgentRunSession:
                      python_code:str,
                      ignore_dependencies: Optional[List[str]]=None,
                      ignore_unsafe_functions: Optional[List[str]]=None
-                     ) -> str:
+                     ) -> Tuple[bool, str]:
         return self.root.execute_code_in_container(
                 python_code,
                 self.workdir,
@@ -456,7 +456,7 @@ class AgentRun:
     def _safety_check(self, 
                      python_code: str,
                      ignore_unsafe_functions: Optional[List[str]]=None
-    ) -> dict[str, str | bool]:
+    ) -> dict[str, Any]:
         """Check if Python code is safe to execute.
         This function uses common patterns and RestrictedPython to check for unsafe patterns in the code.
 
@@ -683,7 +683,7 @@ class AgentRun:
         self, 
         python_code: str,
         workdir: str
-    ) -> dict[str, Union[bool, str]]:
+    ) -> dict:
         """Copy Python code to the container.
         Args:
             container: Docker container object
@@ -744,7 +744,7 @@ class AgentRun:
                                   workdir: str,
                                   ignore_dependencies: Optional[List[str]]=None,
                                   ignore_unsafe_functions: Optional[List[str]]=None,
-    ) -> str:
+    ) -> Tuple[bool, str]:
         """Executes Python code in an isolated Docker container.
         This is the main function to execute Python code in a Docker container. It performs the following steps:
         1. Check if the code is safe to execute
@@ -770,14 +770,14 @@ class AgentRun:
             safety_message = safety_result["message"]
             safe = safety_result["safe"]
             if not safe:
-                return safety_message # pyright: ignore[reportReturnType]
+                return False, safety_message 
 
             # Copy the code to the container
             exec_result = self._copy_code_to_container(python_code, workdir)
             successful_copy = exec_result["success"]
             message = exec_result["message"]
             if not successful_copy:
-                return message # pyright: ignore[reportReturnType]
+                return False, message 
 
             script_name = message # pyright: ignore[reportAssignmentType]
 
@@ -790,27 +790,28 @@ class AgentRun:
                         dependencies.remove(ignore)
             dep_install_result, installed_deps = self._install_dependencies(dependencies)
             if dep_install_result != "Dependencies installed successfully.":
-                return dep_install_result
+                return False, dep_install_result
 
             try:
                 assert script_name is not None
                 script_path = os.path.join(workdir, script_name)
-                _, output = self.execute_command_in_container(
+                exit_code, output = self.execute_command_in_container(
                     f"python {script_path}", 
                     workdir=workdir,
                     timeout=timeout_seconds
                 )
             except self.CommandTimeout:
-                return "Error: Execution timed out."
+                return False, "Error: Execution timed out."
 
         except Exception as e:
-            return ''.join(traceback.format_exception(None, e, e.__traceback__))
+            return False, ''.join(traceback.format_exception(None, e, e.__traceback__))
 
         finally:
-            if script_name and len(installed_deps) > 0:
-                self._clean_up(script_name, installed_deps, workdir)
+            # if script_name and len(installed_deps) > 0:
+            #    self._clean_up(script_name, installed_deps, workdir)
+            pass
 
-        return output
+        return exit_code == 0, output
 
 def is_subpath(child_path, parent_path):
     try:

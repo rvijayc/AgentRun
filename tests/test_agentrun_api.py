@@ -166,7 +166,7 @@ class TestCodeExecution:
         )
         
         # API call succeeds - it successfully executed the code (even though the code had an error)
-        assert result["success"] is True
+        assert result["success"] is False
         # The error appears in the stdout/output
         assert "ZeroDivisionError" in result["output"] or "division by zero" in result["output"]
     
@@ -385,7 +385,7 @@ print('Script executed successfully')
                 f"exec(open('{session.source_path}/process.py').read())",
                 ignore_unsafe_functions = ['exec']
             )
-            assert exec_result["success"] is True
+            assert exec_result["success"] is False
             assert "Use of dangerous built-in function: exec" in exec_result["output"]
             
             # the rest of the code cannot run because "exec" cannot run earlier.

@@ -91,11 +91,12 @@ def execute_command(request: CommandRequest):
         
         execution_time = time.time() - start_time
         
-        log.debug(f'{request.command} executed in {execution_time} seconds.')
+        log.info(f'{request.command} executed in {execution_time} seconds (result={result.returncode}).')
         for line in result.stdout.splitlines():
             log.debug(f'[stdout]: {line}')
-        for line in result.stderr.splitlines():
-            log.debug(f'[stderr]: {line}')
+        if result.returncode:
+            for line in result.stderr.splitlines():
+                log.warning(f'[stderr]: {line}')
 
         return CommandResponse(
             success=result.returncode == 0,

@@ -131,20 +131,13 @@ def execute_code(session_id: str, request: ExecuteCodeRequest):
     
     session = sessions[session_id]
     
-    try:
-        output = session.execute_code(
-            python_code=request.python_code,
-            ignore_dependencies=request.ignore_dependencies,
-            ignore_unsafe_functions=request.ignore_unsafe_functions
-        )
-        log.info(f'ignore_unsafe_functions = {request.ignore_unsafe_functions}')
-        # Always returns success=True because the execution itself succeeded
-        # Any Python errors/exceptions will be in the output
-        return ExecuteCodeResponse(output=output, success=True)
-    except Exception as e:
-        # This only catches errors from the execution infrastructure itself,
-        # not Python errors in the user's code
-        return ExecuteCodeResponse(output=str(e), success=False)
+    success, output = session.execute_code(
+        python_code=request.python_code,
+        ignore_dependencies=request.ignore_dependencies,
+        ignore_unsafe_functions=request.ignore_unsafe_functions
+    )
+    log.info(str(output))
+    return ExecuteCodeResponse(output=output, success=success)
 
 @app.post("/sessions/{session_id}/copy-to", response_model=CopyFileToResponse)
 async def copy_file_to_session(

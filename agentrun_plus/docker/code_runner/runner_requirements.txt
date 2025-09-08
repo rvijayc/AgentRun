@@ -9,4 +9,4 @@ geopandas
 squarify
 tabulate
 prettytable
-
+networkx

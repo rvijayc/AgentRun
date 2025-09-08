@@ -164,7 +164,7 @@ def test_execute_code_with_timeout(code, expected, docker_services):
     )
     name = uuid4().hex
     session = runner.create_session(name)
-    output = session.execute_code(python_code=code)
+    _, output = session.execute_code(python_code=code)
     runner.close_session(session)
     assert output == expected
 
@@ -244,7 +244,7 @@ def test_execute_code_with_dependencies(
     # create session.
     name = uuid4().hex
     session = runner.create_session(name)
-    output = session.execute_code(code)
+    _, output = session.execute_code(code)
     runner.close_session(session)
     assert output == expected
 
@@ -271,7 +271,7 @@ def test_execute_code_in_container(code, expected, docker_services):
     )
     name = uuid4().hex
     session = runner.create_session(name)
-    output = session.execute_code(code)
+    _, output = session.execute_code(code)
     runner.close_session(session)
     assert output == expected
 
@@ -339,7 +339,7 @@ def test_init_w_dependency_mismatch(docker_services):
 
 
 def execute_code_in_container_benchmark(session: AgentRunSession, code):
-    output = session.execute_code(code)
+    _, output = session.execute_code(code)
     return output
 
 

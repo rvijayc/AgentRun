@@ -22,5 +22,5 @@ RUN PIP_CONFIG_FILE=/work/pip.conf pip install -r requirements.txt
 
 WORKDIR /code
 
-COPY ./api/*.py /code
+COPY ./api/*.py /code/
 COPY ./code_runner/api.py /code/code_runner/

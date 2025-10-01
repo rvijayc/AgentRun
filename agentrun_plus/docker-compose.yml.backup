@@ -3,10 +3,10 @@
 # 
 # The overall service is broken down into two parts:
 #
-# - python_runner: Runs arbirary unix commands as a sandbox user inside a
+# - python-runner: Runs arbirary unix commands as a sandbox user inside a
 #   sandbox container environment. This runner should only be accessible from the
 #   api service.
-# - api: Provides the client user interface and talks to the "python_runner" to
+# - api: Provides the client user interface and talks to the "python-runner" to
 #   execute arbirary Python code from the user.  
 # 
 services:
@@ -18,8 +18,8 @@ services:
 # container, run the python code, and retrieve the stdout and any artifacts
 # produced by the python program. 
 #
-# It uses "python_runner" via its REST API as the sandbox to run the actual
-# python code. As such it needs access to the python_runner's REST API
+# It uses "python-runner" via its REST API as the sandbox to run the actual
+# python code. As such it needs access to the python-runner's REST API
 # interface.
 #
   api:
@@ -43,10 +43,10 @@ services:
       start_period: 25s
     restart: unless-stopped
     depends_on:
-      python_runner:
+      python-runner:
         condition: service_healthy      
 
-# python_runner: 
+# python-runner: 
 # --------------
 # This is a sandbox container that is built with user privileges
 # and allows execution of arbitrary unix commands (which can also be used to
@@ -56,7 +56,7 @@ services:
 #
 # It offers a REST API to the "api" container via a local interface that
 # *should* be inaccessible to anyone else besides the "api" container.
-  python_runner:
+  python-runner:
     build:
       context: ./
       dockerfile: docker/code_runner/Dockerfile

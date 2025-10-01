@@ -100,7 +100,7 @@ print_info "Building images with clean cache..."
 
 # Define image names
 API_IMAGE="agentrun_plus-api"
-RUNNER_IMAGE="agentrun_plus-python_runner"
+RUNNER_IMAGE="agentrun_plus-python-runner"
 
 # Define tags
 LATEST_TAG="latest"

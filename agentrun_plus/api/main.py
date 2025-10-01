@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AgentRun API", version="1.0.0", lifespan=lifespan)
 
 # Initialize the backend
-backend = AgentRun(container_url='http://python_runner:5000')
+backend = AgentRun(container_url='http://python-runner:5000')
 
 # Store active sessions
 sessions: Dict[str, AgentRunSession] = {}

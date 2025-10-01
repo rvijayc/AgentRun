@@ -69,8 +69,8 @@ class TestSessionManagement:
         except requests.HTTPError as e:
             print(f"\nFailed to create session: {e}")
             print("\nPOSSIBLE CAUSES:")
-            print("1. Backend initialization failed - check if 'backend = AgentRun(container_name=\"python_runner\")' is working")
-            print("2. Docker container 'python_runner' is not running")
+            print("1. Backend initialization failed - check if 'backend = AgentRun(container_name=\"python-runner\")' is working")
+            print("2. Docker container 'python-runner' is not running")
             print("3. Missing imports in the server code")
             print("4. Exception in backend.create_session() method")
             raise

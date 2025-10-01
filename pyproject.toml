@@ -1,6 +1,6 @@
 [project]
 name = "agentrun_plus"
-version = "0.2.22"
+version = "0.2.23"
 description = "The easiest way to run AI or user generated python code safely in a docker container. This is a fork of the original AgentRun repo with additional customization options added."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,10 +8,7 @@ authors = [
     {name = "Jonathan Adly", email = "gadly0123@gmail.com"},
     {name = "Vijay Ramasami", email = "rvijayc@gmail.com" }
 ]
-license = {text = "Apache-2.0"}
-classifiers = [
-    "License :: OSI Approved :: Apache Software License"
-]
+license = "Apache-2.0"
 dependencies = [
  "docker", "RestrictedPython", "loguru", "fastapi", "uvicorn"
 ]
@@ -24,9 +21,7 @@ build-backend = "setuptools.build_meta"
 packages = [
     "agentrun_plus", 
     "agentrun_plus.api", 
-    "agentrun_plus.code_runner",
-    "agentrun_plus.docker.api",
-    "agentrun_plus.docker.code_runner"
+    "agentrun_plus.code_runner"
 ]
 include-package-data = true
 

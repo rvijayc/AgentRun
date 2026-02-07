@@ -1,7 +1,20 @@
 # Base Docker Compose configuration for AgentRun
 # This file contains common configuration shared across all environments
 # Use with environment-specific override files
-
+#
+# This project allows a user the ability to execute Python code safely in a
+# remote Docker container using a REST API. The overall service is broken down
+# into two parts each running in its own container as a way of providing
+# additional isolation between API handling and executing Python code.
+#
+# - `api`: Handles REST API requests from the user and manages user sessions.
+#   In addition to allowing a user to run arbitrary Python code, it also allows
+#   user to provide context in terms of additional files (ex: SQL databases, CSV
+#   files, etc.,) to be passed and stored in the sandbox volume that is shared
+#   and reserved for execution.
+# - `python-runner` - The sandbox in which the Python code passed through the
+#   REST API runs.
+# 
 services:
   api:
     command: python3 main.py

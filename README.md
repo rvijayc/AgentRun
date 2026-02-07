@@ -48,11 +48,12 @@ This package gives code execution ability to **any LLM** in a single line of cod
 - **Safe code execution**: AgentRun checks the generated code for dangerous elements before execution
 - **Isolated Environment**: Code is executed in a fully isolated docker container
 - **Configurable Resource Management**: You can set how much compute resources the code can consume, with sane defaults
-- **Timeouts**: Set time limits on how long a script can take to run 
+- **Timeouts**: Set time limits on how long a script can take to run
 - **Dependency Management**: Complete control on what dependencies are allowed to install
 - **Dependency Caching**: AgentRun gives you the ability to cache any dependency in advance in the docker container to optimize performance.
 - **Automatic Cleanups**: AgentRun cleans any artifacts created by the generated code.
-- **Comes with a REST API**: Hate setting up docker? AgentRun comes with already configured docker setup for self-hosting.
+- **Dual Protocol Support**: Access via REST API or Model Context Protocol (MCP) for seamless LLM integration
+- **REST API & MCP Server**: Both protocols available simultaneously on the same server, sharing session state
 - **Transparent Exception Handling**: AgentRun returns the same exact output as running Python in your system - exceptions and tracebacks included. No cryptic docker messages.
 
 If you want to use your own Docker configuration, install this package with pip and simply initialize AgentRun with a running Docker container. Additionally, you can use an already configured Docker Compose setup and API that is ready for self-hosting by cloning this repo.
@@ -76,15 +77,139 @@ You can also interact with `curl` if you prefer, but it might get a bit cumberso
 ```shell
 ```
 
-### pip install 
+## Using the MCP (Model Context Protocol) Server
 
-Install AgentRunPlus with a single command via pip (you will need to configure your own Docker setup):
+AgentRunPlus now supports the Model Context Protocol (MCP), allowing LLMs like Claude to use it as a server with tools for code execution. Both REST API and MCP endpoints are available simultaneously on the same server.
 
+### MCP Endpoint
+
+Once the server is running, the MCP endpoint is available at:
+
+```
+http://localhost:8000/mcp
+```
+
+### Available MCP Tools
+
+AgentRunPlus exposes 7 MCP tools:
+
+1. **create_session()** - Create a new isolated session
+2. **execute_code(session_id, code, ...)** - Execute Python code in a session
+3. **upload_file(session_id, filename, content_base64)** - Upload a file to session
+4. **download_file(session_id, src_path)** - Download a file from session
+5. **list_sessions()** - List all active sessions
+6. **get_session_info(session_id)** - Get session details
+7. **close_session(session_id)** - Close and cleanup a session
+
+### Using with Claude Desktop
+
+Add to your Claude Desktop MCP configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "agentrun": {
+      "url": "http://localhost:8000/mcp",
+      "transport": "http"
+    }
+  }
+}
+```
+
+### Using with MCP Python Client
+
+```python
+from mcp import ClientSession
+import asyncio
+import base64
+
+async def run_code_with_mcp():
+    async with ClientSession(url="http://localhost:8000/mcp") as client:
+        # Create a session
+        result = await client.call_tool("create_session", {})
+        session_id = result["session_id"]
+
+        # Execute some Python code
+        exec_result = await client.call_tool("execute_code", {
+            "session_id": session_id,
+            "code": """
+import pandas as pd
+import matplotlib.pyplot as plt
+
+data = {'x': [1, 2, 3, 4], 'y': [10, 20, 25, 30]}
+df = pd.DataFrame(data)
+print(df.describe())
+"""
+        })
+
+        print(exec_result["output"])
+
+        # Close the session
+        await client.call_tool("close_session", {"session_id": session_id})
+
+asyncio.run(run_code_with_mcp())
+```
+
+### File Operations via MCP
+
+```python
+import base64
+
+# Upload a file
+with open("data.csv", "rb") as f:
+    content = f.read()
+    content_base64 = base64.b64encode(content).decode('utf-8')
+
+upload_result = await client.call_tool("upload_file", {
+    "session_id": session_id,
+    "filename": "data.csv",
+    "content_base64": content_base64
+})
+
+# Download a file
+download_result = await client.call_tool("download_file", {
+    "session_id": session_id,
+    "src_path": f"{artifact_path}/output.png"
+})
+
+# Decode the downloaded file
+file_content = base64.b64decode(download_result["content_base64"])
+with open("output.png", "wb") as f:
+    f.write(file_content)
+```
+
+### Interoperability with REST API
+
+Sessions created via MCP are accessible via the REST API and vice versa. Both protocols share the same backend:
+
+```python
+# Create session via MCP
+mcp_result = await mcp_client.call_tool("create_session", {})
+session_id = mcp_result["session_id"]
+
+# Execute code via REST API on the same session
+from agentrun_plus import AgentRunAPIClient
+api_client = AgentRunAPIClient('http://localhost:8000')
+api_client.execute_code(session_id, 'print("Hello from REST!")')
+```
+
+### pip install
+
+Install AgentRunPlus via pip:
+
+**For library usage** (core AgentRun backend):
 ```bash
 pip install agentrun_plus
 ```
 
-Here is a simple example of creating a session and executing some python code.
+**For running the API server** (includes REST API + MCP server):
+```bash
+pip install agentrun_plus[api]
+```
+
+**Note:** If using docker-compose (recommended), dependencies are managed automatically in the container.
+
+Here is a simple example of using the API client to connect to a running server:
 
 ```Python
 ~/llm/AgentRun$ python3

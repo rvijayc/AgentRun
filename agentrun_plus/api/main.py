@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 import logging
 import sys
-from contextlib import asynccontextmanager
 
 # Import the backend classes (assuming they're available)
 from backend import AgentRun, AgentRunSession
@@ -19,27 +18,28 @@ from api import (
         CopyFileFromRequest,
         SessionInfoResponse
 )
+from mcp_server import create_mcp_app
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup - no specific startup logic needed for this app
-    yield
-    # Shutdown - clean up all sessions
-    for session_id, session in sessions.items():
-        try:
-            backend.close_session(session)
-        except Exception as e:
-            print(f"Error closing session {session_id}: {e}")
-    sessions.clear()
-
-# Initialize FastAPI app
-app = FastAPI(title="AgentRun API", version="1.0.0", lifespan=lifespan)
-
-# Initialize the backend
+# Initialize the backend (before lifespan and MCP app creation)
 backend = AgentRun(container_url='http://python-runner:5000')
 
-# Store active sessions
+# Store active sessions (before lifespan)
 sessions: Dict[str, AgentRunSession] = {}
+
+# Create MCP app (before lifespan - we need mcp_app.lifespan)
+mcp_app = create_mcp_app(backend, sessions)
+
+# For now, use MCP app's lifespan directly
+# TODO: Combine with API cleanup logic
+# Initialize FastAPI app with MCP lifespan
+app = FastAPI(
+    title="AgentRun API",
+    version="1.0.0",
+    lifespan=mcp_app.lifespan
+)
+
+# Mount MCP app (shares backend and sessions with REST API)
+app.mount("/mcp", mcp_app)
 
 # Create a logger for app specific messages.
 log = logging.getLogger(__name__)
@@ -57,13 +57,18 @@ def root():
     return {
         "service": "AgentRun API",
         "version": "1.0.0",
+        "protocols": {
+            "REST": "Traditional REST API endpoints",
+            "MCP": "Model Context Protocol server at /mcp"
+        },
         "endpoints": {
             "POST /sessions": "Create a new session",
             "GET /sessions/{session_id}": "Get session information",
             "DELETE /sessions/{session_id}": "Close a session",
             "POST /sessions/{session_id}/execute": "Execute Python code",
             "POST /sessions/{session_id}/copy-to": "Copy file to session",
-            "POST /sessions/{session_id}/copy-from": "Copy file from session"
+            "POST /sessions/{session_id}/copy-from": "Copy file from session",
+            "MCP /mcp": "MCP server endpoint (Streamable HTTP transport)"
         }
     }
 
@@ -297,7 +302,11 @@ def list_sessions():
 @app.get("/health")
 def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "active_sessions": len(sessions)}
+    return {
+        "status": "healthy",
+        "active_sessions": len(sessions),
+        "protocols": ["rest", "mcp"]
+    }
 
 
 if __name__ == "__main__":

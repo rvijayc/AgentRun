@@ -85,8 +85,8 @@ class AgentRunAPIClient:
             # For 500 errors, print additional debugging info
             if response.status_code == 500:
                 print("\n[DEBUGGING TIPS]")
-                print("1. Check if the backend container 'python_runner' is running:")
-                print("   docker ps | grep python_runner")
+                print("1. Check if the backend container 'python-runner' is running:")
+                print("   docker ps | grep python-runner")
                 print("2. Check API server logs:")
                 print("   docker logs <api-container-name>")
                 print("3. Verify the backend AgentRun class is properly initialized")

@@ -21,7 +21,7 @@ from api import (
 from mcp_server import create_mcp_app
 
 # Initialize the backend (before lifespan and MCP app creation)
-backend = AgentRun(container_url='http://python_runner:5000')
+backend = AgentRun(container_url='http://python-runner:5000')
 
 # Store active sessions (before lifespan)
 sessions: Dict[str, AgentRunSession] = {}

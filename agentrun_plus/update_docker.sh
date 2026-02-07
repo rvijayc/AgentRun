@@ -3,7 +3,7 @@
 set -e
 
 API="agentrun-api-1"
-RUNNER="agentrun-python_runner-1"
+RUNNER="agentrun-python-runner-1"
 
 # copy helper files for runner.
 docker cp agentrun_plus/code_runner/api.py $RUNNER:/home/pythonuser/api.py

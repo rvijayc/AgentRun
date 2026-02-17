@@ -324,6 +324,24 @@ class TestFileOperations:
         finally:
             os.unlink(dest_path)
 
+class TestGetPackages:
+    def test_get_packages(self, api_client):
+        """Test getting installed packages via REST API"""
+        result = api_client.get_packages()
+        assert "packages" in result
+        assert "count" in result
+        assert isinstance(result["packages"], list)
+        assert result["count"] == len(result["packages"])
+        assert result["count"] > 0
+
+    def test_get_packages_contains_known_packages(self, api_client):
+        """Test that pre-installed packages are in the list"""
+        result = api_client.get_packages()
+        package_names = [p.lower() for p in result["packages"]]
+        # These are installed via runner_requirements.txt
+        for expected in ["numpy", "pandas", "matplotlib"]:
+            assert expected in package_names, f"Expected '{expected}' in installed packages"
+
 class TestHealthCheck:
     def test_health_endpoint(self, api_client):
         """Test health check endpoint"""

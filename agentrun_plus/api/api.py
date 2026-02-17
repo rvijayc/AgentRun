@@ -189,6 +189,12 @@ class AgentRunAPIClient:
         
         return dest_path
     
+    def get_packages(self) -> dict:
+        """Get the list of installed Python packages in the runner container"""
+        response = self.session.get(self._url("/packages"))
+        self._handle_response(response, "Get Packages")
+        return response.json()
+
     def get_health(self) -> dict:
         """Get health status"""
         response = self.session.get(self._url("/health"))

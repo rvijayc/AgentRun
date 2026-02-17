@@ -44,8 +44,10 @@ app.mount("/mcp", mcp_app)
 # Create a logger for app specific messages.
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
-stream_handler = logging.StreamHandler(sys.stdout)
-log.addHandler(stream_handler)
+# Only add handler if none exists (prevents duplicates on module reload)
+if not log.handlers:
+    stream_handler = logging.StreamHandler(sys.stdout)
+    log.addHandler(stream_handler)
 
 # -------------------------------------
 # REST API Endpoints
@@ -68,6 +70,7 @@ def root():
             "POST /sessions/{session_id}/execute": "Execute Python code",
             "POST /sessions/{session_id}/copy-to": "Copy file to session",
             "POST /sessions/{session_id}/copy-from": "Copy file from session",
+            "GET /packages": "Get installed Python packages",
             "MCP /mcp": "MCP server endpoint (Streamable HTTP transport)"
         }
     }
@@ -289,6 +292,18 @@ def copy_file_from_session(session_id: str, request: CopyFileFromRequest):
             raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to copy file: {str(e)}")
+
+@app.get("/packages")
+def get_packages():
+    """Get the list of Python packages installed in the runner container"""
+    try:
+        packages = backend.get_installed_packages()
+        return {
+            "packages": packages,
+            "count": len(packages)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get packages: {str(e)}")
 
 @app.get("/sessions")
 def list_sessions():

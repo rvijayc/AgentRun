@@ -13,10 +13,11 @@ import os
 import json
 import base64
 from typing import Dict, Any
-from agentrun_plus import AgentRunAPIClient
+from agentrun_plus import AgentRunAPIClient, AgentRunMCPClient
 
 
-# MCP Client Helper Class
+# Legacy MCP Client Helper Class (deprecated - use AgentRunMCPClient instead)
+# Keeping for now for backwards compatibility, will be removed in future
 class MCPClient:
     """Helper class for making MCP tool calls via HTTP using JSON-RPC 2.0"""
 
@@ -255,11 +256,11 @@ class TestMCPSessionManagement:
         result = mcp_client.call_tool("list_sessions")
 
         assert result["count"] >= initial_count + 3
-        assert len(result["session_ids"]) == result["count"]
+        assert len(result["active_sessions"]) == result["count"]
 
         # Verify our sessions are in the list
         for session_id in session_ids:
-            assert session_id in result["session_ids"]
+            assert session_id in result["active_sessions"]
 
         # Cleanup
         for session_id in session_ids:
@@ -502,7 +503,7 @@ class TestMCPRESTInteroperability:
             mcp_result = mcp_client.call_tool("list_sessions")
 
             # Verify REST session appears in MCP list
-            assert rest_session.session_id in mcp_result["session_ids"]
+            assert rest_session.session_id in mcp_result["active_sessions"]
         finally:
             # Cleanup
             api_client.close_session(rest_session.session_id)
@@ -592,6 +593,43 @@ class TestMCPRESTInteroperability:
         finally:
             # Cleanup
             api_client.close_session(session_id)
+
+
+class TestMCPGetPackages:
+    """Tests for MCP get_packages tool"""
+
+    def test_get_packages(self, mcp_client):
+        """Test getting installed packages via MCP"""
+        result = mcp_client.call_tool("get_packages")
+
+        assert "packages" in result
+        assert "count" in result
+        assert isinstance(result["packages"], list)
+        assert result["count"] == len(result["packages"])
+        assert result["count"] > 0
+
+    def test_get_packages_contains_known_packages(self, mcp_client):
+        """Test that pre-installed packages are in the list"""
+        result = mcp_client.call_tool("get_packages")
+        package_names = [p.lower() for p in result["packages"]]
+        # These are installed via runner_requirements.txt
+        for expected in ["numpy", "pandas", "matplotlib"]:
+            assert expected in package_names, f"Expected '{expected}' in installed packages"
+
+    def test_get_packages_no_session_required(self, mcp_client):
+        """Test that get_packages works without any active sessions"""
+        # Close all sessions first
+        sessions_result = mcp_client.call_tool("list_sessions")
+        for session_id in sessions_result["active_sessions"]:
+            try:
+                mcp_client.call_tool("close_session", {"session_id": session_id})
+            except:
+                pass
+
+        # get_packages should still work
+        result = mcp_client.call_tool("get_packages")
+        assert "packages" in result
+        assert result["count"] > 0
 
 
 class TestMCPIntegration:

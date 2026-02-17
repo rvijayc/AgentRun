@@ -21,11 +21,13 @@ from api import (
 # Create a logger for app specific messages.
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setFormatter(
-        logging.Formatter('%(levelname)s: %(message)s')
-)
-log.addHandler(stream_handler)
+# Only add handler if none exists (prevents duplicates on module reload)
+if not log.handlers:
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(
+            logging.Formatter('%(levelname)s: %(message)s')
+    )
+    log.addHandler(stream_handler)
 
 app = FastAPI(title="Sandbox Server", description="Secure sandbox for executing commands and Python code")
 

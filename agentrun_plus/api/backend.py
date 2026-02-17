@@ -139,11 +139,13 @@ class AgentRunSession:
         # Create a logger for app specific messages.
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setFormatter(
-                logging.Formatter('%(levelname)s: %(message)s')
-        )
-        self.logger.addHandler(stream_handler)
+        # Only add handler if none exists (prevents duplicates when multiple sessions created)
+        if not self.logger.handlers:
+            stream_handler = logging.StreamHandler(sys.stdout)
+            stream_handler.setFormatter(
+                    logging.Formatter('%(levelname)s: %(message)s')
+            )
+            self.logger.addHandler(stream_handler)
 
         # create the users specified work directory.
         self.workdir = os.path.join(self.root.homedir, workdir)
@@ -304,11 +306,13 @@ class AgentRun:
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setFormatter(
-                logging.Formatter('%(levelname)s: %(message)s')
-        )
-        self.logger.addHandler(stream_handler)
+        # Only add handler if none exists (prevents duplicates when multiple sessions created)
+        if not self.logger.handlers:
+            stream_handler = logging.StreamHandler(sys.stdout)
+            stream_handler.setFormatter(
+                    logging.Formatter('%(levelname)s: %(message)s')
+            )
+            self.logger.addHandler(stream_handler)
 
         self.client = RunnerClient(self.container_url)
         self.client.health_check()
@@ -412,6 +416,20 @@ class AgentRun:
         return all(
             dep in self.dependencies_whitelist for dep in cached_dependencies
         )
+
+    def get_installed_packages(self) -> List[str]:
+        """Get the list of Python packages installed in the runner container.
+
+        Returns:
+            List of package names currently installed.
+        """
+        exit_code, output = self.execute_command_in_container(
+            cmd=self.install_policy.list_cmd(),
+            workdir=self.homedir
+        )
+        if exit_code != 0:
+            raise RuntimeError(f'Failed to list packages: {output}')
+        return self.install_policy.parse_packages(output)
 
     def execute_command_in_container(
         self, 

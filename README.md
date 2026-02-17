@@ -91,7 +91,7 @@ http://localhost:8000/mcp
 
 ### Available MCP Tools
 
-AgentRunPlus exposes 7 MCP tools:
+AgentRunPlus exposes 9 MCP tools:
 
 1. **create_session()** - Create a new isolated session
 2. **execute_code(session_id, code, ...)** - Execute Python code in a session
@@ -100,6 +100,8 @@ AgentRunPlus exposes 7 MCP tools:
 5. **list_sessions()** - List all active sessions
 6. **get_session_info(session_id)** - Get session details
 7. **close_session(session_id)** - Close and cleanup a session
+8. **get_packages()** - Get list of installed Python packages (no session required)
+9. **get_health()** - Check server health status
 
 ### Using with Claude Desktop
 
@@ -116,81 +118,84 @@ Add to your Claude Desktop MCP configuration (`~/Library/Application Support/Cla
 }
 ```
 
-### Using with MCP Python Client
+### Using the AgentRunMCPClient
+
+The `AgentRunMCPClient` provides a drop-in replacement for `AgentRunAPIClient` that communicates over MCP instead of REST. Both clients share the same interface.
 
 ```python
-from mcp import ClientSession
-import asyncio
-import base64
+from agentrun_plus import AgentRunMCPClient
 
-async def run_code_with_mcp():
-    async with ClientSession(url="http://localhost:8000/mcp") as client:
-        # Create a session
-        result = await client.call_tool("create_session", {})
-        session_id = result["session_id"]
+client = AgentRunMCPClient("http://localhost:8000")
 
-        # Execute some Python code
-        exec_result = await client.call_tool("execute_code", {
-            "session_id": session_id,
-            "code": """
+# Check what packages are available (no session required)
+packages = client.get_packages()
+print(f"{packages['count']} packages available: {packages['packages'][:5]}...")
+
+# Create a session
+session = client.create_session()
+
+# Execute some Python code
+result = client.execute_code(session.session_id, """
 import pandas as pd
 import matplotlib.pyplot as plt
 
 data = {'x': [1, 2, 3, 4], 'y': [10, 20, 25, 30]}
 df = pd.DataFrame(data)
 print(df.describe())
-"""
-        })
+""")
+print(result["output"])
 
-        print(exec_result["output"])
-
-        # Close the session
-        await client.call_tool("close_session", {"session_id": session_id})
-
-asyncio.run(run_code_with_mcp())
+# Close the session
+client.close_session(session.session_id)
 ```
 
-### File Operations via MCP
+### File Operations via MCP Client
 
 ```python
-import base64
+from agentrun_plus import AgentRunMCPClient
 
-# Upload a file
-with open("data.csv", "rb") as f:
-    content = f.read()
-    content_base64 = base64.b64encode(content).decode('utf-8')
+client = AgentRunMCPClient("http://localhost:8000")
+session = client.create_session()
 
-upload_result = await client.call_tool("upload_file", {
-    "session_id": session_id,
-    "filename": "data.csv",
-    "content_base64": content_base64
-})
+# Upload a file (handles base64 encoding automatically)
+client.upload_file(session.session_id, "data.csv")
 
-# Download a file
-download_result = await client.call_tool("download_file", {
-    "session_id": session_id,
-    "src_path": f"{artifact_path}/output.png"
-})
+# Execute code that reads the upload and saves output to artifacts/
+client.execute_code(session.session_id, """
+import pandas as pd
+df = pd.read_csv('src/data.csv')
+df.describe().to_csv('artifacts/summary.csv')
+print('Done!')
+""", ignore_unsafe_functions=['open'])
 
-# Decode the downloaded file
-file_content = base64.b64decode(download_result["content_base64"])
-with open("output.png", "wb") as f:
-    f.write(file_content)
+# Download the result (handles base64 decoding automatically)
+client.download_file(session.session_id, "artifacts/summary.csv", "/tmp")
+
+client.close_session(session.session_id)
 ```
 
 ### Interoperability with REST API
 
-Sessions created via MCP are accessible via the REST API and vice versa. Both protocols share the same backend:
+Sessions created via MCP are accessible via the REST API and vice versa. Both protocols share the same backend and the clients have the same interface:
 
 ```python
+from agentrun_plus import AgentRunMCPClient, AgentRunAPIClient
+
+mcp_client = AgentRunMCPClient("http://localhost:8000")
+api_client = AgentRunAPIClient("http://localhost:8000")
+
 # Create session via MCP
-mcp_result = await mcp_client.call_tool("create_session", {})
-session_id = mcp_result["session_id"]
+session = mcp_client.create_session()
 
 # Execute code via REST API on the same session
-from agentrun_plus import AgentRunAPIClient
-api_client = AgentRunAPIClient('http://localhost:8000')
-api_client.execute_code(session_id, 'print("Hello from REST!")')
+api_client.execute_code(session.session_id, 'print("Hello from REST!")')
+
+# Both clients can list packages the same way
+mcp_packages = mcp_client.get_packages()
+rest_packages = api_client.get_packages()
+assert mcp_packages["packages"] == rest_packages["packages"]
+
+mcp_client.close_session(session.session_id)
 ```
 
 ### pip install
@@ -209,19 +214,21 @@ pip install agentrun_plus[api]
 
 **Note:** If using docker-compose (recommended), dependencies are managed automatically in the container.
 
-Here is a simple example of using the API client to connect to a running server:
+Here is a simple example of using the MCP client to connect to a running server:
 
 ```Python
 ~/llm/AgentRun$ python3
 Python 3.13.2 | packaged by Anaconda, Inc. | (main, Feb  6 2025, 18:56:02) [GCC 11.2.0] on linux
 Type "help", "copyright", "credits" or "license" for more information.
->>> from agentrun_plus import AgentRunAPIClient
->>> client = AgentRunAPIClient('http://localhost:8000')
+>>> from agentrun_plus import AgentRunMCPClient
+>>> client = AgentRunMCPClient('http://localhost:8000')
+>>> client.get_packages()
+{'packages': ['numpy', 'pandas', 'matplotlib', ...], 'count': 42}
 >>> session = client.create_session()
 >>> client.execute_code(session.session_id, 'print("Hello World!")')
-{'output': 'Hello World!\n', 'success': True}
+{'success': True, 'output': 'Hello World!\n'}
 >>> client.close_session(session.session_id)
-{'message': 'Session 978c8bb329cd473d99cd3b596c7b557a closed successfully'}
+{'success': True, 'message': 'Session 978c8bb329cd473d99cd3b596c7b557a closed successfully'}
 >>>
 ```
 

@@ -335,6 +335,134 @@ def test_init_w_dependency_mismatch(docker_services):
         )
     assert "Some cached dependencies are not in the whitelist." in str(excinfo.value)
 
+"""**list_artifact_files / list_src_files**"""
+
+
+def test_list_artifact_files_empty(docker_services):
+    """Fresh artifacts/ directory should be empty."""
+    runner_url, _ = docker_services
+    runner = AgentRun(
+        container_url=runner_url,
+        install_policy=TestUVInstallPolicy(),
+        log_level=LOG_LEVEL,
+        user='root'
+    )
+    name = uuid4().hex
+    session = runner.create_session(name)
+    try:
+        assert session.list_artifact_files() == []
+    finally:
+        runner.close_session(session)
+        check_session_clean(runner, name)
+
+
+def test_list_src_files_empty(docker_services):
+    """Fresh src/ directory should be empty."""
+    runner_url, _ = docker_services
+    runner = AgentRun(
+        container_url=runner_url,
+        install_policy=TestUVInstallPolicy(),
+        log_level=LOG_LEVEL,
+        user='root'
+    )
+    name = uuid4().hex
+    session = runner.create_session(name)
+    try:
+        assert session.list_src_files() == []
+    finally:
+        runner.close_session(session)
+        check_session_clean(runner, name)
+
+
+def test_list_artifact_files_with_content(docker_services):
+    """Files written to artifacts/ by executed code should be listed with correct size."""
+    runner_url, _ = docker_services
+    runner = AgentRun(
+        container_url=runner_url,
+        install_policy=TestUVInstallPolicy(),
+        log_level=LOG_LEVEL,
+        user='root'
+    )
+    name = uuid4().hex
+    session = runner.create_session(name)
+    try:
+        content = "hello world"
+        success, _ = session.execute_code(
+            f"open('artifacts/output.txt', 'w').write('{content}')",
+            ignore_unsafe_functions=['open']
+        )
+        assert success
+        files = session.list_artifact_files()
+        assert len(files) == 1
+        assert files[0]['name'] == 'output.txt'
+        assert files[0]['size_bytes'] == len(content)
+    finally:
+        runner.close_session(session)
+        check_session_clean(runner, name)
+
+
+def test_list_src_files_with_content(docker_services):
+    """Files uploaded to src/ should be listed with correct name and size."""
+    runner_url, _ = docker_services
+    runner = AgentRun(
+        container_url=runner_url,
+        install_policy=TestUVInstallPolicy(),
+        log_level=LOG_LEVEL,
+        user='root'
+    )
+    name = uuid4().hex
+    session = runner.create_session(name)
+    try:
+        payload = b'test content'
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as f:
+            f.write(payload)
+            tmp_path = f.name
+        try:
+            session.copy_file_to(local_path=tmp_path, dest_file_name='data.txt')
+        finally:
+            os.unlink(tmp_path)
+        files = session.list_src_files()
+        assert len(files) == 1
+        assert files[0]['name'] == 'data.txt'
+        assert files[0]['size_bytes'] == len(payload)
+    finally:
+        runner.close_session(session)
+        check_session_clean(runner, name)
+
+
+def test_list_artifact_files_multiple_sorted(docker_services):
+    """Multiple artifact files should be returned in sorted order with correct sizes."""
+    runner_url, _ = docker_services
+    runner = AgentRun(
+        container_url=runner_url,
+        install_policy=TestUVInstallPolicy(),
+        log_level=LOG_LEVEL,
+        user='root'
+    )
+    name = uuid4().hex
+    session = runner.create_session(name)
+    try:
+        # Write three files in non-alphabetical order
+        code = (
+            "open('artifacts/c.txt','w').write('ccc'); "
+            "open('artifacts/a.txt','w').write('aa'); "
+            "open('artifacts/b.txt','w').write('b')"
+        )
+        success, _ = session.execute_code(code, ignore_unsafe_functions=['open'])
+        assert success
+        files = session.list_artifact_files()
+        assert len(files) == 3
+        names = [f['name'] for f in files]
+        assert names == sorted(names), "Files should be returned in sorted order"
+        sizes = {f['name']: f['size_bytes'] for f in files}
+        assert sizes['a.txt'] == 2
+        assert sizes['b.txt'] == 1
+        assert sizes['c.txt'] == 3
+    finally:
+        runner.close_session(session)
+        check_session_clean(runner, name)
+
+
 """**benchmarking**"""
 
 

@@ -227,14 +227,17 @@ class AgentRunMCPClient:
         """Create a new AgentRun session
 
         Returns:
-            SessionInfo: Session information with session_id, workdir, paths
+            SessionInfo: Session information with session_id, workdir, paths,
+                         upload_url, and artifacts_url
         """
         result = self._call_tool("create_session")
         return SessionInfo(
             session_id=result["session_id"],
             workdir=result["workdir"],
             source_path=result["source_path"],
-            artifact_path=result["artifact_path"]
+            artifact_path=result["artifact_path"],
+            upload_url=result.get("upload_url", ""),
+            artifacts_url=result.get("artifacts_url", ""),
         )
 
     def get_session_info(self, session_id: str) -> dict:
@@ -339,6 +342,32 @@ class AgentRunMCPClient:
         })
 
         return result
+
+    def list_artifacts(self, session_id: str) -> dict:
+        """List files in a session's artifacts/ directory with download URLs and sizes.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            dict: {
+                "artifacts": [{"name": str, "size_bytes": int, "download_url": str}, ...],
+                "count": int,
+                "artifacts_url": str
+            }
+        """
+        return self._call_tool("list_artifacts", {"session_id": session_id})
+
+    def list_src(self, session_id: str) -> dict:
+        """List files in a session's src/ directory (uploaded input files).
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            dict: {"files": [{"name": str, "size_bytes": int}, ...], "count": int}
+        """
+        return self._call_tool("list_src", {"session_id": session_id})
 
     def download_file(self, session_id: str, src_path: str, dest_path: str,
                      filename: Optional[str] = None) -> str:

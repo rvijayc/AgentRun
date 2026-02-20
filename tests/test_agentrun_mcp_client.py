@@ -81,6 +81,11 @@ class TestMCPClientSessionManagement:
         assert session.source_path
         assert session.artifact_path
         assert session.session_id == session.workdir
+        # New URL fields
+        assert session.upload_url
+        assert session.artifacts_url
+        assert session.upload_url.endswith(f"/sessions/{session.session_id}/copy-to")
+        assert session.artifacts_url.endswith(f"/sessions/{session.session_id}/artifacts")
 
         # Cleanup
         mcp_client.close_session(session.session_id)
@@ -482,6 +487,92 @@ with open('src/interop.txt', 'r') as f:
             mcp_client.close_session(session.session_id)
 
 
+class TestMCPClientListArtifacts:
+    """Tests for MCP client list_artifacts method"""
+
+    def test_list_artifacts_empty(self, mcp_client, mcp_session):
+        """Test listing artifacts in a fresh session"""
+        result = mcp_client.list_artifacts(mcp_session.session_id)
+
+        assert "artifacts" in result
+        assert "count" in result
+        assert "artifacts_url" in result
+        assert result["count"] == 0
+        assert result["artifacts"] == []
+
+    def test_list_artifacts_with_file(self, mcp_client, mcp_session):
+        """Test listing artifacts after generating a file via code"""
+        code = """
+with open('artifacts/result.txt', 'w') as f:
+    f.write('generated output')
+print('done')
+"""
+        exec_result = mcp_client.execute_code(
+            mcp_session.session_id,
+            code,
+            ignore_unsafe_functions=['open']
+        )
+        assert exec_result["success"] == True
+
+        result = mcp_client.list_artifacts(mcp_session.session_id)
+
+        assert result["count"] == 1
+        artifact = result["artifacts"][0]
+        assert artifact["name"] == "result.txt"
+        assert "size_bytes" in artifact
+        assert "download_url" in artifact
+        assert artifact["download_url"].startswith("http")
+
+    def test_list_artifacts_nonexistent_session(self, mcp_client):
+        """Test list_artifacts with a non-existent session"""
+        result = mcp_client.list_artifacts("nonexistent")
+
+        assert result.get("success") == False
+        assert "not found" in result.get("error", "").lower()
+
+
+class TestMCPClientListSrc:
+    """Tests for MCP client list_src method"""
+
+    def test_list_src_empty(self, mcp_client, mcp_session):
+        """Test listing src files in a fresh session"""
+        result = mcp_client.list_src(mcp_session.session_id)
+
+        assert "files" in result
+        assert "count" in result
+        assert result["count"] == 0
+        assert result["files"] == []
+
+    def test_list_src_after_upload(self, mcp_client, mcp_session):
+        """Test listing src files after uploading a file"""
+        content = b"test content for listing"
+        mcp_client.upload_file_content(
+            mcp_session.session_id,
+            content,
+            "listing_test.txt"
+        )
+
+        result = mcp_client.list_src(mcp_session.session_id)
+
+        assert result["count"] >= 1
+        names = [f["name"] for f in result["files"]]
+        assert "listing_test.txt" in names
+
+        for f in result["files"]:
+            assert "name" in f
+            assert "size_bytes" in f
+
+        listing_file = next(f for f in result["files"] if f["name"] == "listing_test.txt")
+        assert listing_file["size_bytes"] == len(content)
+
+    def test_list_src_nonexistent_session(self, mcp_client):
+        """Test list_src with a non-existent session"""
+        result = mcp_client.list_src("nonexistent")
+
+        assert result.get("success") == False
+        assert "not found" in result.get("error", "").lower()
+
+
 class TestMCPClientInterfaceCompatibility:
     """Tests that MCP client has same interface as REST client"""
 
@@ -497,7 +588,8 @@ class TestMCPClientInterfaceCompatibility:
         critical_methods = {
             'get_health', 'get_packages', 'create_session', 'get_session_info',
             'close_session', 'list_sessions', 'execute_code',
-            'upload_file', 'upload_file_content', 'download_file'
+            'upload_file', 'upload_file_content', 'download_file',
+            'list_artifacts', 'list_src'
         }
 
         for method in critical_methods:

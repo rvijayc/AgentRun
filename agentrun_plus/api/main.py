@@ -2,11 +2,25 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from typing import Dict
 from uuid import uuid4
+import mimetypes
 import os
+import requests
 import tempfile
 from pathlib import Path
 import logging
 import sys
+
+# Base URL used to construct self-referencing REST URLs returned to callers.
+# Set AGENTRUN_BASE_URL in the environment when the server is reachable at a
+# non-default address (e.g. a public hostname or a different port).
+#
+# Docker Compose example (docker-compose.base.yml under api: environment:):
+#   - AGENTRUN_BASE_URL=http://192.168.1.100:8000
+#
+# Kubernetes example (k8s/configmap.yaml under data:):
+#   AGENTRUN_BASE_URL: "https://agentrun.example.com"
+#   (then reference it as an env var in api-deployment.yaml)
+AGENTRUN_BASE_URL = os.environ.get("AGENTRUN_BASE_URL", "http://localhost:8000").rstrip("/")
 
 # Import the backend classes (assuming they're available)
 from backend import AgentRun, AgentRunSession
@@ -27,7 +41,7 @@ backend = AgentRun(container_url='http://python-runner:5000')
 sessions: Dict[str, AgentRunSession] = {}
 
 # Create MCP app (before lifespan - we need mcp_app.lifespan)
-mcp_app = create_mcp_app(backend, sessions)
+mcp_app = create_mcp_app(backend, sessions, base_url=AGENTRUN_BASE_URL)
 
 # For now, use MCP app's lifespan directly
 # TODO: Combine with API cleanup logic
@@ -68,8 +82,9 @@ def root():
             "GET /sessions/{session_id}": "Get session information",
             "DELETE /sessions/{session_id}": "Close a session",
             "POST /sessions/{session_id}/execute": "Execute Python code",
-            "POST /sessions/{session_id}/copy-to": "Copy file to session",
-            "POST /sessions/{session_id}/copy-from": "Copy file from session",
+            "POST /sessions/{session_id}/copy-to": "Upload a file to session src/ (multipart/form-data, field: 'file')",
+            "POST /sessions/{session_id}/copy-from": "Download a file from session artifacts/ (JSON body)",
+            "GET /sessions/{session_id}/artifacts/{filename}": "Download an artifact file directly (curl-friendly)",
             "GET /packages": "Get installed Python packages",
             "MCP /mcp": "MCP server endpoint (Streamable HTTP transport)"
         }
@@ -94,7 +109,9 @@ def create_session():
             session_id=session_id,
             workdir=workdir,
             source_path=session.source_path(),
-            artifact_path=session.artifact_path()
+            artifact_path=session.artifact_path(),
+            upload_url=f"{AGENTRUN_BASE_URL}/sessions/{session_id}/copy-to",
+            artifacts_url=f"{AGENTRUN_BASE_URL}/sessions/{session_id}/artifacts",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
@@ -292,6 +309,102 @@ def copy_file_from_session(session_id: str, request: CopyFileFromRequest):
             raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to copy file: {str(e)}")
+
+@app.get("/sessions/{session_id}/artifacts")
+def list_artifacts(session_id: str):
+    """List files in a session's artifacts/ directory with download URLs and sizes."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sessions[session_id]
+    try:
+        files = session.list_artifact_files()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list artifacts: {str(e)}")
+    artifacts_url = f"{AGENTRUN_BASE_URL}/sessions/{session_id}/artifacts"
+    return {
+        "artifacts": [
+            {**f, "download_url": f"{artifacts_url}/{f['name']}"}
+            for f in files
+        ],
+        "count": len(files),
+        "artifacts_url": artifacts_url,
+    }
+
+
+@app.get("/sessions/{session_id}/src")
+def list_src(session_id: str):
+    """List files in a session's src/ directory (uploaded input files)."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sessions[session_id]
+    try:
+        files = session.list_src_files()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list src files: {str(e)}")
+    return {"files": files, "count": len(files)}
+
+
+@app.get("/sessions/{session_id}/artifacts/{filename}")
+def download_artifact(session_id: str, filename: str):
+    """Download a specific artifact file from a session's artifacts/ directory.
+
+    This is a curl-friendly GET alternative to POST /copy-from.
+    The URL is returned in the create_session response as 'artifacts_url'
+    and in list_artifacts results as 'download_url'.
+
+    Usage:
+        curl http://server:8000/sessions/{session_id}/artifacts/plot.png -o plot.png
+
+    Args:
+        session_id: Session ID (from create_session)
+        filename: Name of the file inside artifacts/ (no path separators allowed)
+    """
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Validate filename: no path traversal, no directory separators
+    if not filename or ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename: path separators and traversal attempts are not allowed")
+    if filename.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid filename: cannot start with a dot")
+
+    session = sessions[session_id]
+
+    # Defense-in-depth: verify the resolved path stays inside artifacts/
+    artifact_dir = Path(session.artifact_path()).resolve()
+    file_path = (artifact_dir / filename).resolve()
+    try:
+        file_path.relative_to(artifact_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied: path is outside the artifact directory")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            session.copy_file_from(
+                src_path=f"artifacts/{filename}",
+                local_dest_path=tmp_dir
+            )
+            downloaded_path = os.path.join(tmp_dir, filename)
+            if not os.path.exists(downloaded_path):
+                raise HTTPException(status_code=404, detail=f"File '{filename}' not found in artifacts")
+            with open(downloaded_path, "rb") as f:
+                file_content = f.read()
+        except HTTPException:
+            raise
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"File '{filename}' not found in artifacts")
+            raise HTTPException(status_code=500, detail=f"Failed to retrieve file: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to retrieve file: {str(e)}")
+
+    content_type, _ = mimetypes.guess_type(filename)
+    return Response(
+        content=file_content,
+        media_type=content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 @app.get("/packages")
 def get_packages():

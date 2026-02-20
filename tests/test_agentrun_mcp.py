@@ -217,6 +217,11 @@ class TestMCPSessionManagement:
         assert "source_path" in result
         assert "artifact_path" in result
         assert result["session_id"] == result["workdir"]
+        # New URL fields
+        assert "upload_url" in result
+        assert "artifacts_url" in result
+        assert result["upload_url"].endswith(f"/sessions/{result['session_id']}/copy-to")
+        assert result["artifacts_url"].endswith(f"/sessions/{result['session_id']}/artifacts")
 
         # Cleanup
         mcp_client.call_tool("close_session", {"session_id": result["session_id"]})
@@ -718,6 +723,142 @@ print('Artifact created')
                 "session_id": session_id
             })
             assert info_result.get("success") == False
+
+
+class TestMCPListArtifacts:
+    """Tests for MCP list_artifacts tool"""
+
+    def test_list_artifacts_empty(self, mcp_client, test_mcp_session):
+        """Test listing artifacts in an empty artifacts directory"""
+        result = mcp_client.call_tool("list_artifacts", {
+            "session_id": test_mcp_session
+        })
+
+        assert "artifacts" in result
+        assert "count" in result
+        assert "artifacts_url" in result
+        assert result["count"] == 0
+        assert result["artifacts"] == []
+
+    def test_list_artifacts_with_file(self, mcp_client, test_mcp_session):
+        """Test listing artifacts after creating a file"""
+        info = mcp_client.call_tool("get_session_info", {
+            "session_id": test_mcp_session
+        })
+        artifact_path = info["artifact_path"]
+
+        mcp_client.call_tool("execute_code", {
+            "session_id": test_mcp_session,
+            "code": f"with open('{artifact_path}/listed.txt', 'w') as f: f.write('hello')",
+            "ignore_unsafe_functions": ["open"]
+        })
+
+        result = mcp_client.call_tool("list_artifacts", {
+            "session_id": test_mcp_session
+        })
+
+        assert result["count"] >= 1
+        names = [a["name"] for a in result["artifacts"]]
+        assert "listed.txt" in names
+
+    def test_list_artifacts_has_download_url(self, mcp_client, test_mcp_session):
+        """Test that each artifact entry includes size_bytes and a download_url"""
+        info = mcp_client.call_tool("get_session_info", {
+            "session_id": test_mcp_session
+        })
+        artifact_path = info["artifact_path"]
+
+        mcp_client.call_tool("execute_code", {
+            "session_id": test_mcp_session,
+            "code": f"with open('{artifact_path}/output.csv', 'w') as f: f.write('a,b\\n1,2')",
+            "ignore_unsafe_functions": ["open"]
+        })
+
+        result = mcp_client.call_tool("list_artifacts", {
+            "session_id": test_mcp_session
+        })
+
+        assert result["count"] >= 1
+        for artifact in result["artifacts"]:
+            assert "name" in artifact
+            assert "size_bytes" in artifact
+            assert "download_url" in artifact
+            assert artifact["download_url"].startswith("http")
+            assert artifact["name"] in artifact["download_url"]
+
+    def test_list_artifacts_nonexistent_session(self, mcp_client):
+        """Test list_artifacts with a non-existent session"""
+        result = mcp_client.call_tool("list_artifacts", {
+            "session_id": "nonexistent"
+        })
+
+        assert result.get("success") == False
+        assert "not found" in result.get("error", "").lower()
+
+
+class TestMCPListSrc:
+    """Tests for MCP list_src tool"""
+
+    def test_list_src_empty(self, mcp_client, test_mcp_session):
+        """Test listing src files in an empty src directory"""
+        result = mcp_client.call_tool("list_src", {
+            "session_id": test_mcp_session
+        })
+
+        assert "files" in result
+        assert "count" in result
+        assert result["count"] == 0
+        assert result["files"] == []
+
+    def test_list_src_after_upload(self, mcp_client, test_mcp_session):
+        """Test listing src files after uploading a file"""
+        content_base64 = base64.b64encode(b"uploaded content").decode('utf-8')
+        mcp_client.call_tool("upload_file", {
+            "session_id": test_mcp_session,
+            "filename": "data.csv",
+            "content_base64": content_base64
+        })
+
+        result = mcp_client.call_tool("list_src", {
+            "session_id": test_mcp_session
+        })
+
+        assert result["count"] >= 1
+        names = [f["name"] for f in result["files"]]
+        assert "data.csv" in names
+
+    def test_list_src_file_has_size(self, mcp_client, test_mcp_session):
+        """Test that each src file entry includes correct size_bytes"""
+        content = b"size test content"
+        content_base64 = base64.b64encode(content).decode('utf-8')
+        mcp_client.call_tool("upload_file", {
+            "session_id": test_mcp_session,
+            "filename": "sized.txt",
+            "content_base64": content_base64
+        })
+
+        result = mcp_client.call_tool("list_src", {
+            "session_id": test_mcp_session
+        })
+
+        assert result["count"] >= 1
+        for f in result["files"]:
+            assert "name" in f
+            assert "size_bytes" in f
+            assert isinstance(f["size_bytes"], int)
+
+        sized_files = [f for f in result["files"] if f["name"] == "sized.txt"]
+        assert len(sized_files) == 1
+        assert sized_files[0]["size_bytes"] == len(content)
+
+    def test_list_src_nonexistent_session(self, mcp_client):
+        """Test list_src with a non-existent session"""
+        result = mcp_client.call_tool("list_src", {
+            "session_id": "nonexistent"
+        })
+
+        assert result.get("success") == False
+        assert "not found" in result.get("error", "").lower()
 
 
 if __name__ == "__main__":

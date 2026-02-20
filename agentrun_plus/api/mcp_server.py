@@ -87,16 +87,20 @@ if not log.handlers:
     log.addHandler(stream_handler)
 
 
-def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession]):
+def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession], base_url: str = "http://localhost:8000"):
     """Create MCP app that shares state with REST API
 
     Args:
         backend: Shared AgentRun backend instance
         sessions: Shared sessions dictionary (same as REST API)
+        base_url: Externally reachable base URL of this server (e.g. "http://192.168.1.10:8000").
+                  Controlled by the AGENTRUN_BASE_URL environment variable. Used to construct
+                  upload_url and artifact download URLs returned to LLM callers.
 
     Returns:
         ASGI application for mounting to FastAPI
     """
+    base_url = base_url.rstrip("/")
 
     # Create FastMCP instance
     # In FastMCP 2.x, only the name parameter is required
@@ -121,12 +125,19 @@ def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession]):
             - Relative path: 'src/filename.txt'
             - Or: import os; os.chdir('src')
 
+        The response includes two REST API URLs for efficient large/binary file transfer
+        without routing file bytes through the LLM:
+            - upload_url: POST a file directly into src/ using multipart/form-data
+            - artifacts_url: base URL for GET downloads of individual artifact files
+
         Returns:
             dict: {
                 "session_id": str,       # Unique session identifier
                 "workdir": str,          # Working directory name
                 "source_path": str,      # Full path to src/ (for uploads)
-                "artifact_path": str     # Full path to artifacts/ (for downloads)
+                "artifact_path": str,    # Full path to artifacts/ (for downloads)
+                "upload_url": str,       # REST URL for uploading files (POST multipart/form-data, field: 'file')
+                "artifacts_url": str     # REST base URL for downloading artifacts (GET /<filename>)
             }
         """
         try:
@@ -146,7 +157,9 @@ def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession]):
                 "session_id": session_id,
                 "workdir": workdir,
                 "source_path": session.source_path(),
-                "artifact_path": session.artifact_path()
+                "artifact_path": session.artifact_path(),
+                "upload_url": f"{base_url}/sessions/{session_id}/copy-to",
+                "artifacts_url": f"{base_url}/sessions/{session_id}/artifacts",
             }
         except Exception as e:
             log.error(f'[MCP] Failed to create session: {e}')
@@ -231,14 +244,29 @@ def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession]):
         filename: str,
         content_base64: str
     ) -> dict:
-        """Upload a file to a session's source directory
+        """Upload a file to a session's source directory (base64 transfer)
 
         Files are uploaded to the session's src/ subdirectory. When executing code,
         access uploaded files using the relative path 'src/filename'.
 
-        Example workflow:
-            1. upload_file(session_id, "data.csv", base64_content)
-            2. execute_code(session_id, "import pandas as pd; df = pd.read_csv('src/data.csv')")
+        IMPORTANT - When to use this tool vs. the REST API:
+            - Use this tool ONLY when the file content needs to be part of the LLM's
+              context (e.g. a small text file, a short CSV you will inspect inline).
+            - For large files (>~10 KB) or binary files (images, databases, model
+              weights, zip archives, etc.) use the REST upload endpoint instead, so
+              the raw bytes never pass through the LLM:
+
+              upload_url is returned by create_session(). Use it with curl:
+                  curl -X POST <upload_url> -F "file=@/path/to/your/file.db"
+
+              Example for a SQLite database:
+                  curl -X POST http://server:8000/sessions/{id}/copy-to \\
+                       -F "file=@mydata.db"
+
+        Example workflow (small text file via this tool):
+            1. upload_file(session_id, "config.json", base64_content)
+            2. execute_code(session_id, "import json; cfg = json.load(open('src/config.json'))",
+                            ignore_unsafe_functions=['open'])
 
         The file content must be base64 encoded for safe JSON transmission.
 
@@ -336,30 +364,41 @@ def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession]):
         session_id: str,
         src_path: str
     ) -> dict:
-        """Download a file from a session's artifact directory
+        """Download a file from a session's artifact directory (base64 transfer)
 
         Files can only be downloaded from the session's artifacts/ subdirectory.
         Your code should save output files directly to the artifacts/ directory.
 
-        Example - Save a plot:
-            import matplotlib.pyplot as plt
-            plt.plot([1, 2, 3])
-            plt.savefig('artifacts/plot.png')  # Save directly to artifacts/
+        IMPORTANT - When to use this tool vs. the REST API:
+            - Use this tool ONLY when you need to read the file contents inline
+              (e.g. a short text report, a small CSV you will summarize).
+            - For large files (>~10 KB) or binary files (images, databases, etc.)
+              use the REST download endpoint instead, so raw bytes never pass
+              through the LLM. Call list_artifacts() to get the ready-made
+              download URL for each artifact, then fetch it with curl:
 
-        Then download it:
-            download_file(session_id, "artifacts/plot.png")  # Must include artifacts/ prefix!
+              curl <download_url> -o output.png
 
-        Example - Save CSV output:
-            import pandas as pd
-            df.to_csv('artifacts/results.csv')  # Save directly to artifacts/
+              Example for a PNG chart:
+                  curl http://server:8000/sessions/{id}/artifacts/chart.png -o chart.png
 
-        The file content is returned base64-encoded for safe JSON transmission.
+        Example - Save a plot then download its URL via list_artifacts:
+            execute_code: plt.savefig('artifacts/plot.png')
+            list_artifacts -> returns download_url for plot.png
+            (pass that URL to curl or wget; do NOT call download_file for images)
+
+        Example - Read a small text report inline (appropriate use of this tool):
+            execute_code: open('artifacts/report.txt','w').write(summary)
+            download_file(session_id, "artifacts/report.txt")  -> read content_base64
+
+        Files can only be downloaded from artifacts/. Must include "artifacts/" prefix
+        in src_path for relative paths.
 
         Args:
             session_id: The session ID
             src_path: Path to file, either:
-                     - Relative to workdir: "artifacts/plot.png"
-                     - Absolute path: "/full/path/to/session/artifacts/plot.png"
+                     - Relative to workdir: "artifacts/report.txt"
+                     - Absolute path: "/full/path/to/session/artifacts/report.txt"
                      NOTE: Must include "artifacts/" prefix for relative paths!
 
         Returns:
@@ -597,6 +636,106 @@ def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession]):
                 "status": "unhealthy",
                 "error": str(e)
             }
+
+    # Tool 10: List Artifacts
+    @mcp.tool()
+    def list_artifacts(session_id: str) -> dict:
+        """List files in a session's artifacts/ directory with download URLs and sizes.
+
+        Use this to discover what files your code has produced without reading their
+        contents. Each entry includes a ready-made download_url you can pass directly
+        to curl (or another HTTP tool) to retrieve the file without routing bytes
+        through the LLM.
+
+        Typical workflow for binary/large outputs:
+            1. execute_code  -> saves plot.png, report.pdf, etc. to artifacts/
+            2. list_artifacts -> get download_url for each file
+            3. curl <download_url> -o <local_path>   (outside the LLM context)
+
+        For small text files you want to read inline, use download_file() instead.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            dict: {
+                "artifacts": [
+                    {
+                        "name": str,           # filename
+                        "size_bytes": int,     # file size
+                        "download_url": str    # GET this URL with curl to retrieve the file
+                    },
+                    ...
+                ],
+                "count": int,
+                "artifacts_url": str   # base URL; append /<filename> for any individual file
+            }
+        """
+        if session_id not in sessions:
+            return {"success": False, "error": f"Session {session_id} not found"}
+
+        try:
+            session = sessions[session_id]
+            files = session.list_artifact_files()
+            artifacts_url = f"{base_url}/sessions/{session_id}/artifacts"
+            artifacts = [
+                {
+                    "name": f["name"],
+                    "size_bytes": f["size_bytes"],
+                    "download_url": f"{artifacts_url}/{f['name']}",
+                }
+                for f in files
+            ]
+            log.info(f'[MCP] Listed {len(artifacts)} artifacts for session {session_id}')
+            return {
+                "artifacts": artifacts,
+                "count": len(artifacts),
+                "artifacts_url": artifacts_url,
+            }
+        except Exception as e:
+            log.error(f'[MCP] Failed to list artifacts for session {session_id}: {e}')
+            return {"success": False, "error": f"Failed to list artifacts: {str(e)}"}
+
+    # Tool 11: List Src
+    @mcp.tool()
+    def list_src(session_id: str) -> dict:
+        """List files in a session's src/ directory (uploaded input files).
+
+        Use this to verify that file uploads succeeded or to see what input
+        files are available to your code before executing it.
+
+        Files in src/ are accessed from executed code via the relative path
+        'src/<filename>' (e.g. pd.read_csv('src/data.csv')).
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            dict: {
+                "files": [
+                    {
+                        "name": str,       # filename
+                        "size_bytes": int  # file size
+                    },
+                    ...
+                ],
+                "count": int
+            }
+        """
+        if session_id not in sessions:
+            return {"success": False, "error": f"Session {session_id} not found"}
+
+        try:
+            session = sessions[session_id]
+            files = session.list_src_files()
+            log.info(f'[MCP] Listed {len(files)} src files for session {session_id}')
+            return {
+                "files": files,
+                "count": len(files),
+            }
+        except Exception as e:
+            log.error(f'[MCP] Failed to list src files for session {session_id}: {e}')
+            return {"success": False, "error": f"Failed to list src files: {str(e)}"}
 
     # Return the ASGI app for mounting
     # In FastMCP 2.x, use http_app() to get the ASGI application

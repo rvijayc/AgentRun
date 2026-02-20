@@ -487,5 +487,120 @@ class TestConcurrency:
             api_client.close_session(session1.session_id)
             api_client.close_session(session2.session_id)
 
+class TestSessionURLFields:
+    """Session creation should include upload_url and artifacts_url in the response."""
+
+    def test_create_session_has_upload_url(self, api_client):
+        session = api_client.create_session()
+        try:
+            assert session.upload_url, "upload_url should be non-empty"
+            assert session.upload_url.endswith(f"/sessions/{session.session_id}/copy-to")
+        finally:
+            api_client.close_session(session.session_id)
+
+    def test_create_session_has_artifacts_url(self, api_client):
+        session = api_client.create_session()
+        try:
+            assert session.artifacts_url, "artifacts_url should be non-empty"
+            assert session.artifacts_url.endswith(f"/sessions/{session.session_id}/artifacts")
+        finally:
+            api_client.close_session(session.session_id)
+
+    def test_upload_url_starts_with_http(self, api_client):
+        session = api_client.create_session()
+        try:
+            assert session.upload_url.startswith("http")
+        finally:
+            api_client.close_session(session.session_id)
+
+    def test_artifacts_url_starts_with_http(self, api_client):
+        session = api_client.create_session()
+        try:
+            assert session.artifacts_url.startswith("http")
+        finally:
+            api_client.close_session(session.session_id)
+
+
+class TestArtifactGetEndpoint:
+    """Tests for GET /sessions/{session_id}/artifacts/{filename}."""
+
+    def test_download_text_artifact(self, api_client, test_session):
+        """Text file written to artifacts/ should be retrievable via GET."""
+        content = "hello artifact world"
+        api_client.execute_code(
+            test_session.session_id,
+            f"open('artifacts/result.txt','w').write('{content}')",
+            ignore_unsafe_functions=["open"],
+        )
+        resp = requests.get(f"{test_session.artifacts_url}/result.txt")
+        assert resp.status_code == 200
+        assert resp.text == content
+
+    def test_download_binary_artifact(self, api_client, test_session):
+        """Binary artifact should be returned byte-for-byte via GET."""
+        api_client.execute_code(
+            test_session.session_id,
+            "open('artifacts/binary.bin','wb').write(bytes(range(256)))",
+            ignore_unsafe_functions=["open"],
+        )
+        resp = requests.get(f"{test_session.artifacts_url}/binary.bin")
+        assert resp.status_code == 200
+        assert resp.content == bytes(range(256))
+
+    def test_content_type_for_csv(self, api_client, test_session):
+        """CSV files should be served with a CSV-indicating Content-Type."""
+        api_client.execute_code(
+            test_session.session_id,
+            "open('artifacts/data.csv','w').write('a,b\\n1,2')",
+            ignore_unsafe_functions=["open"],
+        )
+        resp = requests.get(f"{test_session.artifacts_url}/data.csv")
+        assert resp.status_code == 200
+        assert "csv" in resp.headers["content-type"]
+
+    def test_content_type_for_text(self, api_client, test_session):
+        """Text files should be served with a text/* Content-Type."""
+        api_client.execute_code(
+            test_session.session_id,
+            "open('artifacts/note.txt','w').write('hi')",
+            ignore_unsafe_functions=["open"],
+        )
+        resp = requests.get(f"{test_session.artifacts_url}/note.txt")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/")
+
+    def test_nonexistent_file_returns_404(self, test_session):
+        """Requesting a file that doesn't exist in artifacts/ should return 404."""
+        resp = requests.get(f"{test_session.artifacts_url}/no_such_file.txt")
+        assert resp.status_code == 404
+
+    def test_invalid_session_returns_404(self, api_client):
+        """Requesting an artifact for a non-existent session should return 404."""
+        fake_url = f"{api_client.base_url}/sessions/000000000000000000000000deadbeef/artifacts/x.txt"
+        resp = requests.get(fake_url)
+        assert resp.status_code == 404
+
+    def test_dotdot_in_filename_rejected(self, test_session):
+        """Filenames containing '..' must be rejected with 400."""
+        resp = requests.get(f"{test_session.artifacts_url}/..evil")
+        assert resp.status_code == 400
+
+    def test_dotfile_rejected(self, test_session):
+        """Filenames starting with '.' must be rejected with 400."""
+        resp = requests.get(f"{test_session.artifacts_url}/.hidden")
+        assert resp.status_code == 400
+
+    def test_artifacts_url_field_is_directly_usable(self, api_client, test_session):
+        """Appending a filename to artifacts_url should serve the artifact correctly."""
+        api_client.execute_code(
+            test_session.session_id,
+            "open('artifacts/via_url.txt','w').write('url works')",
+            ignore_unsafe_functions=["open"],
+        )
+        resp = requests.get(f"{test_session.artifacts_url}/via_url.txt")
+        assert resp.status_code == 200
+        assert resp.text == "url works"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -15,6 +15,8 @@ class SessionCreateResponse(BaseModel):
     workdir: str
     source_path: str
     artifact_path: str
+    upload_url: str       # REST endpoint to POST a file into src/ (multipart/form-data, field name: 'file')
+    artifacts_url: str    # Base REST URL for downloading artifacts via GET /<filename>
 
 class ExecuteCodeRequest(BaseModel):
     python_code: str
@@ -45,6 +47,8 @@ class SessionInfo:
     workdir: str
     source_path: str
     artifact_path: str
+    upload_url: str = ""       # REST endpoint to POST a file into src/ (multipart/form-data, field name: 'file')
+    artifacts_url: str = ""    # Base REST URL for downloading artifacts via GET /<filename>
 
 # -------------------------------------
 # Helper Class for REST API Usage.
@@ -189,6 +193,18 @@ class AgentRunAPIClient:
         
         return dest_path
     
+    def list_artifacts(self, session_id: str) -> dict:
+        """List files in a session's artifacts/ directory with download URLs and sizes"""
+        response = self.session.get(self._url(f"/sessions/{session_id}/artifacts"))
+        self._handle_response(response, f"List Artifacts [{session_id}]")
+        return response.json()
+
+    def list_src(self, session_id: str) -> dict:
+        """List files in a session's src/ directory (uploaded input files)"""
+        response = self.session.get(self._url(f"/sessions/{session_id}/src"))
+        self._handle_response(response, f"List Src [{session_id}]")
+        return response.json()
+
     def get_packages(self) -> dict:
         """Get the list of installed Python packages in the runner container"""
         response = self.session.get(self._url("/packages"))

@@ -208,6 +208,49 @@ class AgentRunSession:
             raise RuntimeError(result['message'])
         return os.path.join(self.pkg_dir, dest_file_name)
 
+    def _list_files(self, directory: str) -> list:
+        """List files in a container directory (private helper - always called with trusted paths).
+
+        Args:
+            directory: Absolute path inside the container (must be src/ or artifacts/ of this session).
+
+        Returns:
+            List of dicts with 'name' and 'size_bytes' keys for each file.
+        """
+        cmd = (
+            f"python3 -c \""
+            f"import os,json; "
+            f"d='{directory}'; "
+            f"r=[{{'name':f,'size_bytes':os.path.getsize(os.path.join(d,f))}} "
+            f"   for f in sorted(os.listdir(d)) "
+            f"   if os.path.isfile(os.path.join(d,f))]; "
+            f"print(json.dumps(r))\""
+        )
+        exit_code, output = self.root.execute_command_in_container(
+            cmd=cmd,
+            workdir=self.workdir
+        )
+        if exit_code != 0:
+            raise RuntimeError(f'Failed to list files in {directory}: {output}')
+        import json as _json
+        return _json.loads(output)
+
+    def list_artifact_files(self) -> list:
+        """List files in this session's artifacts/ directory.
+
+        Returns:
+            List of dicts with 'name' and 'size_bytes' keys.
+        """
+        return self._list_files(self.artifacts_dir)
+
+    def list_src_files(self) -> list:
+        """List files in this session's src/ directory.
+
+        Returns:
+            List of dicts with 'name' and 'size_bytes' keys.
+        """
+        return self._list_files(self.pkg_dir)
+
     def copy_file_from(self, src_path: str, local_dest_path:str):
 
         _src_path = Path(src_path)

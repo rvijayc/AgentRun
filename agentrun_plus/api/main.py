@@ -41,7 +41,13 @@ backend = AgentRun(container_url='http://python-runner:5000')
 sessions: Dict[str, AgentRunSession] = {}
 
 # Create MCP app (before lifespan - we need mcp_app.lifespan)
-mcp_app = create_mcp_app(backend, sessions, base_url=AGENTRUN_BASE_URL)
+mcp = create_mcp_app(backend, sessions, base_url=AGENTRUN_BASE_URL)
+
+# Create a streamable HTTP app.
+mcp_http_app = mcp.http_app(path='/')
+
+# Create a SSE app (for IDEs like Cline).
+mcp_sse_app = mcp.http_app(path='/', transport='sse')
 
 # For now, use MCP app's lifespan directly
 # TODO: Combine with API cleanup logic
@@ -49,11 +55,12 @@ mcp_app = create_mcp_app(backend, sessions, base_url=AGENTRUN_BASE_URL)
 app = FastAPI(
     title="AgentRun API",
     version="1.0.0",
-    lifespan=mcp_app.lifespan
+    lifespan=mcp_http_app.lifespan
 )
 
-# Mount MCP app (shares backend and sessions with REST API)
-app.mount("/mcp", mcp_app)
+# Mount both Streamable HTTP and SSE endpoints.
+app.mount("/mcp", mcp_http_app)
+app.mount("/sse", mcp_sse_app)
 
 # Create a logger for app specific messages.
 log = logging.getLogger(__name__)

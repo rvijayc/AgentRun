@@ -861,5 +861,88 @@ class TestMCPListSrc:
         assert "not found" in result.get("error", "").lower()
 
 
+class TestSSEEndpoint:
+    """Smoke tests for SSE transport endpoint (/sse).
+
+    These tests verify that the SSE transport is accessible and performs the
+    MCP handshake correctly. They do NOT re-test tool functionality (that is
+    covered by the Streamable HTTP tests above).
+    """
+
+    def test_sse_returns_event_stream(self, docker_services):
+        """GET /sse should respond with text/event-stream content type"""
+        _, api_url = docker_services
+        with requests.get(f"{api_url}/sse", stream=True, timeout=5) as resp:
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers.get("content-type", "")
+
+    def test_sse_sends_endpoint_event(self, docker_services):
+        """SSE stream should immediately deliver an 'endpoint' event with a POST URL"""
+        _, api_url = docker_services
+        with requests.get(f"{api_url}/sse", stream=True, timeout=5) as resp:
+            assert resp.status_code == 200
+
+            event_type = None
+            event_data = None
+            for raw_line in resp.iter_lines(decode_unicode=True):
+                if raw_line.startswith("event:"):
+                    event_type = raw_line.split(":", 1)[1].strip()
+                elif raw_line.startswith("data:"):
+                    event_data = raw_line.split(":", 1)[1].strip()
+                if event_type and event_data:
+                    break
+
+            assert event_type == "endpoint", f"Expected 'endpoint' event, got '{event_type}'"
+            assert event_data, "Endpoint event had no data"
+
+    def test_sse_initialize(self, docker_services):
+        """SSE endpoint should accept MCP initialize and tools/list JSON-RPC requests.
+
+        SSE is a bidirectional protocol: responses arrive on the SSE stream, not in the
+        POST response body. Reading the SSE stream asynchronously from a synchronous test
+        requires threading. Since tool functionality is already validated via the Streamable
+        HTTP tests, this test only verifies that the SSE message endpoint correctly accepts
+        well-formed JSON-RPC POSTs (status 200/202), which is sufficient as a smoke test.
+        """
+        _, api_url = docker_services
+
+        with requests.get(f"{api_url}/sse", stream=True, timeout=10) as sse_resp:
+            assert sse_resp.status_code == 200
+
+            # Parse the endpoint event to get the POST URL
+            endpoint_url = None
+            event_type = None
+            for raw_line in sse_resp.iter_lines(decode_unicode=True):
+                if raw_line.startswith("event:"):
+                    event_type = raw_line.split(":", 1)[1].strip()
+                elif raw_line.startswith("data:") and event_type == "endpoint":
+                    path = raw_line.split(":", 1)[1].strip()
+                    endpoint_url = f"{api_url}{path}" if path.startswith("/") else path
+                    break
+
+            assert endpoint_url, "No endpoint event received from SSE stream"
+
+            # Initialize the MCP session
+            init_resp = requests.post(endpoint_url, json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "sse-test-client", "version": "1.0"},
+                },
+            })
+            assert init_resp.status_code in (200, 202)
+
+            # Request the tool list
+            tools_resp = requests.post(endpoint_url, json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+            })
+            assert tools_resp.status_code in (200, 202)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

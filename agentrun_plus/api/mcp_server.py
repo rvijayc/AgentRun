@@ -737,6 +737,7 @@ def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession], base
             log.error(f'[MCP] Failed to list src files for session {session_id}: {e}')
             return {"success": False, "error": f"Failed to list src files: {str(e)}"}
 
-    # Return the ASGI app for mounting
-    # In FastMCP 2.x, use http_app() to get the ASGI application
-    return mcp.http_app(path='/')
+    # Return the FastMCP instance so that thee caller can create multiple
+    # transport apps (streamable HTTP or SSE for programmatic and IDE clients
+    # respectively).
+    return mcp

@@ -10,6 +10,8 @@
 services:
   api:
     image: ${DOCKER_REGISTRY:-docker.io}/${DOCKERHUB_USERNAME:-rvijayc}/agentrun-api:${IMAGE_TAG:-latest}
+    env_file:
+      - .env.prod
 
   python-runner:
     image: ${DOCKER_REGISTRY:-docker.io}/${DOCKERHUB_USERNAME:-rvijayc}/agentrun-python-runner:${IMAGE_TAG:-latest}

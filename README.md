@@ -161,12 +161,13 @@ session = client.create_session()
 client.upload_file(session.session_id, "data.csv")
 
 # Execute code that reads the upload and saves output to artifacts/
+# Note: src/ and artifacts/ are pre-created - no need to mkdir them
 client.execute_code(session.session_id, """
 import pandas as pd
 df = pd.read_csv('src/data.csv')
 df.describe().to_csv('artifacts/summary.csv')
 print('Done!')
-""", ignore_unsafe_functions=['open'])
+""")
 
 # Download the result (handles base64 decoding automatically)
 client.download_file(session.session_id, "artifacts/summary.csv", "/tmp")

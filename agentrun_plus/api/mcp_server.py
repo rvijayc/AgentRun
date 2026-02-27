@@ -66,7 +66,8 @@ Directory Structure:
         └── plot.png           # Save as 'artifacts/plot.png' from code
 
 Safety Rules (enforced server-side):
-    Blocked builtins:  exec, eval, compile, input, __import__
+    Blocked builtins:  exec, eval, compile, input, __import__,
+                       globals, locals, vars, dir
     Blocked modules:   os, sys, subprocess, builtins, shutil
     Packages:          Only packages listed by get_packages() may be used.
                        Do NOT attempt to install packages in generated code.
@@ -192,12 +193,23 @@ def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession], base
             - Save artifacts: Write directly to 'artifacts/output.png'
             - Example: open('src/data.csv', 'r')  # Read an uploaded file
 
+        State:
+            Each execute_code call runs in a FRESH Python process. Variables,
+            imports, and in-memory state do NOT persist between calls. Use files
+            in src/ or artifacts/ to pass data between executions.
+
+        Output:
+            Avoid printing large amounts of data to stdout. Large outputs waste
+            LLM context. Write large results to artifacts/ instead and use
+            list_artifacts() to get download URLs.
+
         Directories:
             Both src/ and artifacts/ are pre-created by create_session().
             DO NOT create these directories in your code - they already exist.
 
         Safety - Blocked builtins (will raise a safety error):
             exec, eval, compile, input, __import__
+            globals, locals, vars, dir
 
         Safety - Blocked modules (will raise a safety error):
             os, sys, subprocess, builtins, shutil
@@ -276,8 +288,7 @@ def create_mcp_app(backend: AgentRun, sessions: Dict[str, AgentRunSession], base
 
         Example workflow (small text file via this tool):
             1. upload_file(session_id, "config.json", base64_content)
-            2. execute_code(session_id, "import json; cfg = json.load(open('src/config.json'))",
-                            ignore_unsafe_functions=['open'])
+            2. execute_code(session_id, "import json; cfg = json.load(open('src/config.json'))")
 
         The file content must be base64 encoded for safe JSON transmission.
 

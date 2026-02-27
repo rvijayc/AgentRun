@@ -16,7 +16,7 @@ Example:
 import os
 import base64
 import json
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
 import requests
@@ -280,16 +280,12 @@ class AgentRunMCPClient:
 
     def execute_code(self,
                      session_id: str,
-                     python_code: str,
-                     ignore_dependencies: Optional[List[str]] = None,
-                     ignore_unsafe_functions: Optional[List[str]] = None) -> dict:
+                     python_code: str) -> dict:
         """Execute Python code in a session
 
         Args:
             session_id: The session ID
             python_code: Python code to execute
-            ignore_dependencies: List of dependencies to ignore
-            ignore_unsafe_functions: List of unsafe functions to allow
 
         Returns:
             dict: {"success": bool, "output": str}
@@ -297,8 +293,6 @@ class AgentRunMCPClient:
         return self._call_tool("execute_code", {
             "session_id": session_id,
             "code": python_code,
-            "ignore_dependencies": ignore_dependencies,
-            "ignore_unsafe_functions": ignore_unsafe_functions
         })
 
     def upload_file(self, session_id: str, file_path: str, filename: Optional[str] = None) -> dict:

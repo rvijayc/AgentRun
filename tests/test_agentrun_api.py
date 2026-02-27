@@ -223,7 +223,6 @@ class TestFileOperations:
         api_client.execute_code(
             test_session.session_id,
             f"with open('{test_session.artifact_path}/output.txt', 'w') as f: f.write('Generated content')",
-            ignore_unsafe_functions=['open']
         )
         
         # Download the file
@@ -457,26 +456,22 @@ class TestConcurrency:
             api_client.execute_code(
                 session1.session_id,
                 "with open('test.txt', 'w') as f: f.write('Session 1 content')",
-                ignore_unsafe_functions=['open']
             )
-            
+
             api_client.execute_code(
                 session2.session_id,
                 "with open('test.txt', 'w') as f: f.write('Session 2 content')",
-                ignore_unsafe_functions=['open']
             )
-            
+
             # Read content from each session
             result1 = api_client.execute_code(
                 session1.session_id,
                 "with open('test.txt', 'r') as f: print(f.read())",
-                ignore_unsafe_functions=['open']
             )
-            
+
             result2 = api_client.execute_code(
                 session2.session_id,
                 "with open('test.txt', 'r') as f: print(f.read())",
-                ignore_unsafe_functions=['open']
             )
             
             # Verify isolation
@@ -530,7 +525,6 @@ class TestArtifactGetEndpoint:
         api_client.execute_code(
             test_session.session_id,
             f"open('artifacts/result.txt','w').write('{content}')",
-            ignore_unsafe_functions=["open"],
         )
         resp = requests.get(f"{test_session.artifacts_url}/result.txt")
         assert resp.status_code == 200
@@ -541,7 +535,6 @@ class TestArtifactGetEndpoint:
         api_client.execute_code(
             test_session.session_id,
             "open('artifacts/binary.bin','wb').write(bytes(range(256)))",
-            ignore_unsafe_functions=["open"],
         )
         resp = requests.get(f"{test_session.artifacts_url}/binary.bin")
         assert resp.status_code == 200
@@ -552,7 +545,6 @@ class TestArtifactGetEndpoint:
         api_client.execute_code(
             test_session.session_id,
             "open('artifacts/data.csv','w').write('a,b\\n1,2')",
-            ignore_unsafe_functions=["open"],
         )
         resp = requests.get(f"{test_session.artifacts_url}/data.csv")
         assert resp.status_code == 200
@@ -563,7 +555,6 @@ class TestArtifactGetEndpoint:
         api_client.execute_code(
             test_session.session_id,
             "open('artifacts/note.txt','w').write('hi')",
-            ignore_unsafe_functions=["open"],
         )
         resp = requests.get(f"{test_session.artifacts_url}/note.txt")
         assert resp.status_code == 200
@@ -595,7 +586,6 @@ class TestArtifactGetEndpoint:
         api_client.execute_code(
             test_session.session_id,
             "open('artifacts/via_url.txt','w').write('url works')",
-            ignore_unsafe_functions=["open"],
         )
         resp = requests.get(f"{test_session.artifacts_url}/via_url.txt")
         assert resp.status_code == 200

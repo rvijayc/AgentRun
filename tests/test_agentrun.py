@@ -118,7 +118,11 @@ def docker_container():
         ),
         (
             "with open('secret_file.txt', 'r') as file:\n    print(file.read())",
-            {"safe": False, "message": "Unsafe function call: open"},
+            {"safe": True, "message": "The code is safe to execute."},
+        ),
+        (
+            "import shutil\nshutil.copy('src/data.csv', 'artifacts/data.csv')",
+            {"safe": False, "message": "Unsafe module import: shutil"},
         ),
         (
             "import subprocess\nsubprocess.Popen(['ping', '-c', '4', 'example.com'])",
@@ -389,7 +393,6 @@ def test_list_artifact_files_with_content(docker_services):
         content = "hello world"
         success, _ = session.execute_code(
             f"open('artifacts/output.txt', 'w').write('{content}')",
-            ignore_unsafe_functions=['open']
         )
         assert success
         files = session.list_artifact_files()
@@ -448,7 +451,7 @@ def test_list_artifact_files_multiple_sorted(docker_services):
             "open('artifacts/a.txt','w').write('aa'); "
             "open('artifacts/b.txt','w').write('b')"
         )
-        success, _ = session.execute_code(code, ignore_unsafe_functions=['open'])
+        success, _ = session.execute_code(code)
         assert success
         files = session.list_artifact_files()
         assert len(files) == 3

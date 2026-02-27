@@ -336,16 +336,14 @@ class TestMCPCodeExecution:
         assert "ZeroDivisionError" in result["output"] or "division by zero" in result["output"].lower()
 
     def test_execute_code_with_ignore_options(self, mcp_client, test_mcp_session):
-        """Test code execution with ignore options"""
+        """Test that execute_code accepts only session_id and code parameters"""
         result = mcp_client.call_tool("execute_code", {
             "session_id": test_mcp_session,
-            "code": "print('Testing ignore options')",
-            "ignore_dependencies": ["numpy"],
-            "ignore_unsafe_functions": []
+            "code": "print('Testing execute_code')",
         })
 
         assert result["success"] == True
-        assert "Testing ignore options" in result["output"]
+        assert "Testing execute_code" in result["output"]
 
     def test_execute_in_nonexistent_session(self, mcp_client):
         """Test executing code in non-existent session"""
@@ -422,7 +420,6 @@ class TestMCPFileOperations:
         mcp_client.call_tool("execute_code", {
             "session_id": test_mcp_session,
             "code": f"with open('{artifact_path}/output.txt', 'w') as f: f.write('Generated content')",
-            "ignore_unsafe_functions": ["open"]
         })
 
         # Download the file
@@ -476,10 +473,15 @@ class TestMCPFileOperations:
         artifact_path = info["artifact_path"]
         source_path = info["source_path"]
 
-        # Copy file to artifacts via code execution
+        # Copy file to artifacts via code execution (using open/read/write, not shutil)
         mcp_client.call_tool("execute_code", {
             "session_id": test_mcp_session,
-            "code": f"import shutil; shutil.copy('{source_path}/roundtrip.txt', '{artifact_path}/roundtrip.txt')"
+            "code": (
+                f"with open('{source_path}/roundtrip.txt', 'rb') as f:\n"
+                f"    content = f.read()\n"
+                f"with open('{artifact_path}/roundtrip.txt', 'wb') as f:\n"
+                f"    f.write(content)\n"
+            )
         })
 
         # Download
@@ -666,33 +668,31 @@ print('Script executed successfully')
             })
             assert upload_result["success"] == True
 
-            # 3. Execute the script (reading and running it)
-            exec_result = mcp_client.call_tool("execute_code", {
+            # 3. Attempt to execute the uploaded script via exec()
+            # exec is in dangerous_builtins and will always be blocked; this step is
+            # intentionally skipped in favour of the inline execution in step 4.
+            mcp_client.call_tool("execute_code", {
                 "session_id": session_id,
                 "code": f"""
 with open('{source_path}/process.py', 'r') as f:
     code = f.read()
 exec(code)
 """,
-                "ignore_unsafe_functions": ["open", "exec"]
             })
 
-            # Note: exec might fail due to safety checks, but let's verify the attempt
+            # Note: exec is blocked by dangerous_builtins; step 4 creates the artifact directly.
             # If it fails, we can still test other parts of the workflow
 
-            # 4. Alternative: Execute inline to create artifact
+            # 4. Execute inline to create artifact directly in artifacts/
             exec_result2 = mcp_client.call_tool("execute_code", {
                 "session_id": session_id,
                 "code": f"""
 import json
-import shutil
 data = {{'result': 'success', 'value': 42}}
-with open('output.json', 'w') as f:
+with open('{artifact_path}/output.json', 'w') as f:
     json.dump(data, f)
-shutil.copy('output.json', '{artifact_path}/output.json')
 print('Artifact created')
 """,
-                "ignore_unsafe_functions": ["open"]
             })
             assert exec_result2["success"] == True
             assert "Artifact created" in exec_result2["output"]
@@ -750,7 +750,6 @@ class TestMCPListArtifacts:
         mcp_client.call_tool("execute_code", {
             "session_id": test_mcp_session,
             "code": f"with open('{artifact_path}/listed.txt', 'w') as f: f.write('hello')",
-            "ignore_unsafe_functions": ["open"]
         })
 
         result = mcp_client.call_tool("list_artifacts", {
@@ -771,7 +770,6 @@ class TestMCPListArtifacts:
         mcp_client.call_tool("execute_code", {
             "session_id": test_mcp_session,
             "code": f"with open('{artifact_path}/output.csv', 'w') as f: f.write('a,b\\n1,2')",
-            "ignore_unsafe_functions": ["open"]
         })
 
         result = mcp_client.call_tool("list_artifacts", {

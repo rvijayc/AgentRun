@@ -532,18 +532,13 @@ class AgentRun:
         result = {"safe": True, "message": "The code is safe to execute."}
 
         # Crude check for problematic code (os, sys, subprocess, exec, eval, etc.)
-        unsafe_modules = {"os", "sys", "subprocess", "builtins"}
+        unsafe_modules = {"os", "sys", "subprocess", "builtins", "shutil"}
         unsafe_functions = {
             "exec",
             "eval",
             "compile",
-            "open",
             "input",
             "__import__",
-            "getattr",
-            "setattr",
-            "delattr",
-            "hasattr",
         }
         dangerous_builtins = {
             "globals",

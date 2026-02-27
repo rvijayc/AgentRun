@@ -184,7 +184,6 @@ print(f'DataFrame shape: {df.shape}')
         result = mcp_client.execute_code(
             mcp_session.session_id,
             code,
-            ignore_unsafe_functions=['open']
         )
 
         assert result["success"] == True
@@ -205,8 +204,8 @@ print(f'DataFrame shape: {df.shape}')
         assert result["success"] == False
         assert "unsafe" in result["output"].lower() or "restricted" in result["output"].lower()
 
-    def test_execute_code_with_ignore_unsafe(self, mcp_client, mcp_session):
-        """Test executing code with unsafe functions allowed"""
+    def test_execute_code_open_allowed_by_default(self, mcp_client, mcp_session):
+        """Test that open() is allowed by default (removed from unsafe_functions)"""
         code = """
 with open('/tmp/test.txt', 'w') as f:
     f.write('test')
@@ -215,7 +214,6 @@ print('File written')
         result = mcp_client.execute_code(
             mcp_session.session_id,
             code,
-            ignore_unsafe_functions=['open']
         )
 
         assert result["success"] == True
@@ -253,7 +251,6 @@ print(f'Content: {content}')
             exec_result = mcp_client.execute_code(
                 mcp_session.session_id,
                 code,
-                ignore_unsafe_functions=['open']
             )
 
             assert exec_result["success"] == True
@@ -286,7 +283,6 @@ print(content.decode('utf-8'))
         exec_result = mcp_client.execute_code(
             mcp_session.session_id,
             code,
-            ignore_unsafe_functions=['open']
         )
 
         assert exec_result["success"] == True
@@ -316,7 +312,6 @@ print(f'First 5 bytes: {list(content[:5])}')
         exec_result = mcp_client.execute_code(
             mcp_session.session_id,
             code,
-            ignore_unsafe_functions=['open']
         )
 
         assert exec_result["success"] == True
@@ -335,7 +330,6 @@ print('File created in artifacts/')
         exec_result = mcp_client.execute_code(
             mcp_session.session_id,
             code,
-            ignore_unsafe_functions=['open']
         )
         assert exec_result["success"] == True
 
@@ -378,7 +372,6 @@ print('Copied to artifacts')
         exec_result = mcp_client.execute_code(
             mcp_session.session_id,
             code,
-            ignore_unsafe_functions=['open']
         )
         assert exec_result["success"] == True
 
@@ -477,7 +470,6 @@ with open('src/interop.txt', 'r') as f:
             result = api_client.execute_code(
                 session.session_id,
                 code,
-                ignore_unsafe_functions=['open']
             )
 
             assert result["success"] == True
@@ -510,7 +502,6 @@ print('done')
         exec_result = mcp_client.execute_code(
             mcp_session.session_id,
             code,
-            ignore_unsafe_functions=['open']
         )
         assert exec_result["success"] == True
 
